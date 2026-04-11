@@ -1,8 +1,10 @@
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::sync::{Arc, Mutex};
 use serde::Deserialize;
 use anyhow::Result;
-use crate::backend::{Workspace, WorkspaceId, WorkspaceState};
+use gpui::{AsyncApp, Task};
+use crate::backend::{EventSink, Workspace, WorkspaceBackend, WorkspaceEvent, WorkspaceId, WorkspaceState};
 
 #[derive(Deserialize)]
 struct RawWorkspace {
@@ -89,5 +91,87 @@ impl SwayConn {
     /// the main handle is blocked on read.
     pub fn try_clone(&self) -> anyhow::Result<SwayConn> {
         Ok(SwayConn { stream: self.stream.try_clone()? })
+    }
+}
+
+const MSG_RUN_COMMAND: u32 = 0;
+const MSG_GET_WORKSPACES: u32 = 1;
+const MSG_SUBSCRIBE: u32 = 2;
+const EVENT_WORKSPACE: u32 = 0x80000000;
+
+pub struct SwayBackend {
+    /// Cloned write-side stream used by `activate` from any thread.
+    cmd_conn: Arc<Mutex<Option<SwayConn>>>,
+}
+
+impl SwayBackend {
+    pub fn new() -> Self {
+        SwayBackend { cmd_conn: Arc::new(Mutex::new(None)) }
+    }
+}
+
+impl WorkspaceBackend for SwayBackend {
+    fn run(self: Box<Self>, sink: EventSink, cx: &mut AsyncApp) -> Task<()> {
+        let cmd_conn = self.cmd_conn.clone();
+        cx.background_executor().spawn(async move {
+            loop {
+                match run_session(&cmd_conn, &sink) {
+                    Ok(()) => log::info!("sway session ended cleanly"),
+                    Err(e) => log::warn!("sway session error: {e:#}"),
+                }
+                let _ = sink.send(WorkspaceEvent::Disconnected);
+                // Reconnection backoff handled in Task 11. For now, exit on error.
+                break;
+            }
+        })
+    }
+
+    fn activate(&self, id: &WorkspaceId) {
+        let mut guard = self.cmd_conn.lock().unwrap();
+        let Some(conn) = guard.as_mut() else {
+            log::warn!("activate: no sway connection");
+            return;
+        };
+        let cmd = format!("workspace {}", id.0);
+        if let Err(e) = conn.send(MSG_RUN_COMMAND, cmd.as_bytes()) {
+            log::warn!("activate: send failed: {e:#}");
+        }
+        // Drain the reply so we don't desync the stream.
+        if let Err(e) = conn.read_message() {
+            log::warn!("activate: read reply failed: {e:#}");
+        }
+    }
+}
+
+fn run_session(
+    cmd_conn: &Arc<Mutex<Option<SwayConn>>>,
+    sink: &EventSink,
+) -> anyhow::Result<()> {
+    let mut conn = SwayConn::connect()?;
+    let cmd = conn.try_clone()?;
+    *cmd_conn.lock().unwrap() = Some(cmd);
+
+    // 1. Subscribe
+    conn.send(MSG_SUBSCRIBE, br#"["workspace"]"#)?;
+    let (_t, _payload) = conn.read_message()?; // subscription ack
+
+    // 2. Initial snapshot
+    conn.send(MSG_GET_WORKSPACES, b"")?;
+    let (_t, payload) = conn.read_message()?;
+    let state = parse_get_workspaces(std::str::from_utf8(&payload)?)?;
+    sink.send(WorkspaceEvent::Snapshot(state))?;
+
+    // 3. Event loop — refetch snapshot on every workspace event for simplicity
+    loop {
+        let (msg_type, _payload) = conn.read_message()?;
+        if msg_type == EVENT_WORKSPACE {
+            // Re-fetch full state instead of applying deltas. Simpler, fewer bugs.
+            // Use a fresh command connection to avoid mid-event recursion.
+            let mut snap_conn = SwayConn::connect()?;
+            snap_conn.send(MSG_GET_WORKSPACES, b"")?;
+            let (_t, payload) = snap_conn.read_message()?;
+            let state = parse_get_workspaces(std::str::from_utf8(&payload)?)?;
+            sink.send(WorkspaceEvent::Snapshot(state))?;
+        }
     }
 }
