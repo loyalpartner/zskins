@@ -1,21 +1,14 @@
+mod bar;
+mod theme;
+
 use gpui::{
-    App, AppContext, Bounds, Context, IntoElement, Render, Size, Styled, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
-    div, layer_shell::*, point, px, rgba,
+    App, AppContext, Bounds, Size, WindowBackgroundAppearance, WindowBounds, WindowKind,
+    WindowOptions, layer_shell::*, point, px,
 };
 use gpui_platform::application;
 
-const BAR_HEIGHT: f32 = 32.0;
-
-struct Bar;
-
-impl Render for Bar {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .bg(rgba(0x1e1e2eff))
-    }
-}
+use crate::bar::Bar;
+use crate::theme::BAR_HEIGHT;
 
 fn main() {
     env_logger::init();
@@ -26,7 +19,7 @@ fn main() {
                 titlebar: None,
                 window_bounds: Some(WindowBounds::Windowed(Bounds {
                     origin: point(px(0.), px(0.)),
-                    size: Size::new(px(1920.), px(BAR_HEIGHT)),
+                    size: Size::new(px(1920.), BAR_HEIGHT),
                 })),
                 app_id: Some("zbar".to_string()),
                 window_background: WindowBackgroundAppearance::Opaque,
@@ -34,13 +27,13 @@ fn main() {
                     namespace: "zbar".to_string(),
                     layer: Layer::Top,
                     anchor: Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
-                    exclusive_zone: Some(px(BAR_HEIGHT)),
+                    exclusive_zone: Some(BAR_HEIGHT),
                     keyboard_interactivity: KeyboardInteractivity::None,
                     ..Default::default()
                 }),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| Bar),
+            |_, cx| cx.new(Bar::new),
         )
         .unwrap();
     });
