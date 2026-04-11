@@ -1,0 +1,19 @@
+[package]
+name = "zbar"
+version = "0.1.0"
+edition = "2021"
+description = "Wayland status bar built on GPUI"
+
+[dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", features = ["wayland"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
+
+[profile.release]
+lto = "thin"
