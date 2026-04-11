@@ -1,16 +1,18 @@
 use gpui::{
-    Context, IntoElement, ParentElement, Render, Styled, Window,
-    div,
+    Context, Entity, IntoElement, ParentElement, Render, Styled, Window,
+    div, prelude::*,
 };
+use crate::modules::clock::ClockModule;
 use crate::theme;
 
 pub struct Bar {
-    // Module handles will be added in later tasks.
+    clock: Entity<ClockModule>,
 }
 
 impl Bar {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
-        Bar {}
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        let clock = cx.new(ClockModule::new);
+        Bar { clock }
     }
 }
 
@@ -24,20 +26,17 @@ impl Render for Bar {
             .bg(theme::bg())
             .text_color(theme::fg())
             .text_size(theme::FONT_SIZE)
-            // Left segment
             .child(
                 div().flex_1().flex().items_center().gap(theme::MODULE_GAP)
                     .child("workspaces")
             )
-            // Center segment
             .child(
                 div().flex_1().flex().items_center().justify_center()
                     .child("title")
             )
-            // Right segment
             .child(
                 div().flex_1().flex().items_center().justify_end()
-                    .child("clock")
+                    .child(self.clock.clone())
             )
     }
 }

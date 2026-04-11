@@ -1,4 +1,5 @@
 mod bar;
+mod modules;
 mod theme;
 
 use gpui::{
