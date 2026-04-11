@@ -1,3 +1,4 @@
+mod backend;
 mod bar;
 mod modules;
 mod theme;
