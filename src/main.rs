@@ -1,10 +1,12 @@
 mod bar;
 
+use std::sync::Arc;
 use gpui::{
-    App, AppContext, Bounds, Size, WindowBackgroundAppearance, WindowBounds, WindowKind,
-    WindowOptions, layer_shell::*, point, px,
+    App, AppContext, Bounds, Size, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
+    layer_shell::*, point, px,
 };
 use gpui_platform::application;
+use zbar::backend::{WorkspaceBackend, sway::SwayBackend};
 use zbar::theme::BAR_HEIGHT;
 
 use crate::bar::Bar;
@@ -12,7 +14,10 @@ use crate::bar::Bar;
 fn main() {
     env_logger::init();
 
-    application().run(|cx: &mut App| {
+    let backend: Option<Arc<dyn WorkspaceBackend>> = Some(Arc::new(SwayBackend::new()));
+
+    application().run(move |cx: &mut App| {
+        let backend = backend.clone();
         cx.open_window(
             WindowOptions {
                 titlebar: None,
@@ -32,7 +37,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| cx.new(Bar::new),
+            |_, cx| cx.new(|cx| Bar::new(backend, cx)),
         )
         .unwrap();
     });

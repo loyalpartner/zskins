@@ -1,18 +1,26 @@
+use std::sync::Arc;
 use gpui::{
     Context, Entity, IntoElement, ParentElement, Render, Styled, Window,
     div, prelude::*,
 };
+use zbar::backend::WorkspaceBackend;
 use zbar::modules::clock::ClockModule;
+use zbar::modules::workspaces::WorkspacesModule;
 use zbar::theme;
 
 pub struct Bar {
+    workspaces: Entity<WorkspacesModule>,
     clock: Entity<ClockModule>,
 }
 
 impl Bar {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        backend: Option<Arc<dyn WorkspaceBackend>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let workspaces = cx.new(|cx| WorkspacesModule::new(backend, cx));
         let clock = cx.new(ClockModule::new);
-        Bar { clock }
+        Bar { workspaces, clock }
     }
 }
 
@@ -28,7 +36,7 @@ impl Render for Bar {
             .text_size(theme::FONT_SIZE)
             .child(
                 div().flex_1().flex().items_center().gap(theme::MODULE_GAP)
-                    .child("workspaces")
+                    .child(self.workspaces.clone())
             )
             .child(
                 div().flex_1().flex().items_center().justify_center()

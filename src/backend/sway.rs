@@ -111,35 +111,26 @@ impl SwayBackend {
 }
 
 impl WorkspaceBackend for SwayBackend {
-    fn run(self: Box<Self>, sink: EventSink, cx: &mut AsyncApp) -> Task<()> {
+    fn run(&self, sink: EventSink, cx: &mut AsyncApp) -> Task<()> {
         let cmd_conn = self.cmd_conn.clone();
         cx.background_executor().spawn(async move {
-            loop {
-                match run_session(&cmd_conn, &sink) {
-                    Ok(()) => log::info!("sway session ended cleanly"),
-                    Err(e) => log::warn!("sway session error: {e:#}"),
-                }
-                let _ = sink.send(WorkspaceEvent::Disconnected);
-                // Reconnection backoff handled in Task 11. For now, exit on error.
-                break;
+            match run_session(&cmd_conn, &sink) {
+                Ok(()) => log::info!("sway session ended cleanly"),
+                Err(e) => log::warn!("sway session error: {e:#}"),
             }
+            let _ = sink.send_blocking(WorkspaceEvent::Disconnected);
         })
     }
 
     fn activate(&self, id: &WorkspaceId) {
         let mut guard = self.cmd_conn.lock().unwrap();
-        let Some(conn) = guard.as_mut() else {
-            log::warn!("activate: no sway connection");
-            return;
-        };
+        let Some(conn) = guard.as_mut() else { return };
         let cmd = format!("workspace {}", id.0);
         if let Err(e) = conn.send(MSG_RUN_COMMAND, cmd.as_bytes()) {
-            log::warn!("activate: send failed: {e:#}");
+            log::warn!("activate failed: {e:#}");
+            return;
         }
-        // Drain the reply so we don't desync the stream.
-        if let Err(e) = conn.read_message() {
-            log::warn!("activate: read reply failed: {e:#}");
-        }
+        let _ = conn.read_message();
     }
 }
 
@@ -159,7 +150,7 @@ fn run_session(
     conn.send(MSG_GET_WORKSPACES, b"")?;
     let (_t, payload) = conn.read_message()?;
     let state = parse_get_workspaces(std::str::from_utf8(&payload)?)?;
-    sink.send(WorkspaceEvent::Snapshot(state))?;
+    sink.send_blocking(WorkspaceEvent::Snapshot(state))?;
 
     // 3. Event loop — refetch snapshot on every workspace event for simplicity
     loop {
@@ -171,7 +162,7 @@ fn run_session(
             snap_conn.send(MSG_GET_WORKSPACES, b"")?;
             let (_t, payload) = snap_conn.read_message()?;
             let state = parse_get_workspaces(std::str::from_utf8(&payload)?)?;
-            sink.send(WorkspaceEvent::Snapshot(state))?;
+            sink.send_blocking(WorkspaceEvent::Snapshot(state))?;
         }
     }
 }

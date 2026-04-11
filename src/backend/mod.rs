@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use gpui::{AsyncApp, Task};
 
 pub mod detect;
@@ -33,12 +31,12 @@ pub enum WorkspaceEvent {
 
 /// Async sender to the workspaces module.
 /// Implementations call this from background tasks; the module receives via channel.
-pub type EventSink = std::sync::mpsc::Sender<WorkspaceEvent>;
+pub type EventSink = async_channel::Sender<WorkspaceEvent>;
 
-pub trait WorkspaceBackend: Send + 'static {
+pub trait WorkspaceBackend: Send + Sync + 'static {
     /// Spawn the backend's main loop on `cx`. The backend pushes `WorkspaceEvent`s
     /// through `sink`. Returns a Task that owns the loop's lifetime.
-    fn run(self: Box<Self>, sink: EventSink, cx: &mut AsyncApp) -> Task<()>;
+    fn run(&self, sink: EventSink, cx: &mut AsyncApp) -> Task<()>;
 
     /// Switch to the given workspace. Best-effort; failures logged but not propagated.
     fn activate(&self, id: &WorkspaceId);
