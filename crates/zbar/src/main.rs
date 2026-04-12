@@ -18,6 +18,10 @@ fn main() {
         .init();
 
     let backend = zbar::backend::detect::detect_backend();
+    let width = px(zbar::backend::sway::query_output_width().unwrap_or_else(|| {
+        tracing::warn!("failed to query output width, falling back to 1920");
+        1920.0
+    }));
 
     application().run(move |cx: &mut App| {
         let backend = backend.clone();
@@ -26,7 +30,7 @@ fn main() {
                 titlebar: None,
                 window_bounds: Some(WindowBounds::Windowed(Bounds {
                     origin: point(px(0.), px(0.)),
-                    size: Size::new(px(1920.), BAR_HEIGHT),
+                    size: Size::new(width, BAR_HEIGHT),
                 })),
                 app_id: Some("zbar".to_string()),
                 window_background: WindowBackgroundAppearance::Transparent,

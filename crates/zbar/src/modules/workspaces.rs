@@ -73,17 +73,24 @@ impl Render for WorkspacesModule {
         let mut row = div().flex().items_center().gap_1();
         for ws in &self.state.workspaces {
             let id = ws.id.clone();
-            let (bg, text_color, font_weight) = if ws.active {
+            let (bg, hover_bg, text_color, font_weight) = if ws.active {
                 (
                     theme::accent_dim(),
+                    theme::accent_dim_hover(),
                     theme::accent(),
                     gpui::FontWeight::SEMIBOLD,
                 )
             } else if ws.urgent {
-                (theme::surface(), theme::urgent(), gpui::FontWeight::MEDIUM)
+                (
+                    theme::surface(),
+                    theme::surface_hover(),
+                    theme::urgent(),
+                    gpui::FontWeight::MEDIUM,
+                )
             } else {
                 (
                     gpui::Hsla::transparent_black(),
+                    theme::surface_hover(),
                     theme::fg_dim(),
                     gpui::FontWeight::NORMAL,
                 )
@@ -95,7 +102,7 @@ impl Render for WorkspacesModule {
                 .bg(bg)
                 .text_color(text_color)
                 .font_weight(font_weight)
-                .hover(|s| s.bg(theme::surface_hover()))
+                .hover(move |s| s.bg(hover_bg))
                 .cursor_pointer()
                 .child(ws.name.clone());
             if let Some(backend) = self.backend.as_ref() {

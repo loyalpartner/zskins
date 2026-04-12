@@ -102,6 +102,7 @@ impl SwayConn {
 const MSG_RUN_COMMAND: u32 = 0;
 const MSG_GET_WORKSPACES: u32 = 1;
 const MSG_SUBSCRIBE: u32 = 2;
+const MSG_GET_OUTPUTS: u32 = 3;
 const EVENT_WORKSPACE: u32 = 0x80000000;
 
 #[derive(Default)]
@@ -179,6 +180,29 @@ pub fn run_window_title_session(sink: async_channel::Sender<Option<String>>) -> 
             }
         }
     }
+}
+
+#[derive(Deserialize)]
+struct RawOutputMode {
+    width: f64,
+}
+
+#[derive(Deserialize)]
+struct RawOutput {
+    current_mode: RawOutputMode,
+    scale: f64,
+}
+
+pub fn query_output_width() -> Option<f32> {
+    let mut conn = SwayConn::connect().ok()?;
+    conn.send(MSG_GET_OUTPUTS, b"").ok()?;
+    let (_ty, payload) = conn.read_message().ok()?;
+    let outputs: Vec<RawOutput> = serde_json::from_slice(&payload).ok()?;
+    let o = outputs.first()?;
+    if o.scale <= 0.0 {
+        return None;
+    }
+    Some((o.current_mode.width / o.scale) as f32)
 }
 
 fn fetch_workspaces(cmd: &mut SwayConn) -> anyhow::Result<WorkspaceState> {

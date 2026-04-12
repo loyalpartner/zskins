@@ -29,6 +29,9 @@ pub fn accent() -> Hsla {
 pub fn accent_dim() -> Hsla {
     with_alpha(0x89b4fa, 0.15)
 }
+pub fn accent_dim_hover() -> Hsla {
+    with_alpha(0x89b4fa, 0.25)
+}
 pub fn surface() -> Hsla {
     with_alpha(0x313244, 0.5)
 }

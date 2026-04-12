@@ -44,7 +44,8 @@ fn separator() -> impl IntoElement {
 }
 
 impl Render for Bar {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity_id = cx.entity().entity_id();
         div()
             .size_full()
             .flex()
@@ -53,6 +54,7 @@ impl Render for Bar {
             .bg(theme::bg())
             .text_color(theme::fg())
             .text_size(theme::FONT_SIZE)
+            .on_mouse_move(move |_: &gpui::MouseMoveEvent, _window, cx| cx.notify(entity_id))
             .child(
                 div()
                     .flex_1()
