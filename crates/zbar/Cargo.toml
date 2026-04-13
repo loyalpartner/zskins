@@ -16,3 +16,4 @@ tracing-subscriber.workspace = true
 async-channel.workspace = true
 wayland-client.workspace = true
 wayland-protocols.workspace = true
+libc = "0.2"

@@ -1,5 +1,6 @@
 use gpui::{
-    div, prelude::*, px, Context, Entity, IntoElement, ParentElement, Render, Styled, Window,
+    div, prelude::*, px, Context, DisplayId, Entity, IntoElement, ParentElement, Render, Styled,
+    Window,
 };
 use std::sync::Arc;
 use zbar::backend::WorkspaceBackend;
@@ -25,11 +26,15 @@ pub struct Bar {
 }
 
 impl Bar {
-    pub fn new(backend: Option<Arc<dyn WorkspaceBackend>>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        backend: Option<Arc<dyn WorkspaceBackend>>,
+        display_id: Option<DisplayId>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Bar {
             workspaces: cx.new(|cx| WorkspacesModule::new(backend, cx)),
             window_title: cx.new(WindowTitleModule::new),
-            network: cx.new(NetworkModule::new),
+            network: cx.new(|cx| NetworkModule::new(display_id, cx)),
             volume: cx.new(VolumeModule::new),
             brightness: cx.new(BrightnessModule::new),
             battery: cx.new(BatteryModule::new),

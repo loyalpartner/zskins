@@ -1,101 +1,180 @@
+use crate::modules::network_popup::NetworkPopup;
+use crate::net_info::{self, format_rate_short, IfaceSnapshot, NetEvent};
 use crate::theme;
-use gpui::{div, Context, IntoElement, ParentElement, Render, Styled, Window};
-use std::fs;
-use std::process::Command;
-use std::time::Duration;
+use gpui::{
+    div, layer_shell::*, point, px, AppContext, Bounds, Context, DisplayId, InteractiveElement,
+    IntoElement, ParentElement, Render, Size, StatefulInteractiveElement, Styled, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+};
+use std::collections::HashMap;
 
 pub struct NetworkModule {
-    state: NetState,
-}
-
-#[derive(PartialEq)]
-enum NetState {
-    Wifi { ssid: String },
-    Ethernet,
-    Disconnected,
+    interfaces: Vec<IfaceSnapshot>,
+    rates: HashMap<u32, (f64, f64)>,
+    display_id: Option<DisplayId>,
+    popup: Option<WindowHandle<NetworkPopup>>,
 }
 
 impl NetworkModule {
-    pub fn new(cx: &mut Context<Self>) -> Self {
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor()
-                .timer(Duration::from_secs(10))
-                .await;
-            let state = read_network();
-            if this
-                .update(cx, |m, cx| {
-                    if m.state != state {
-                        m.state = state;
-                        cx.notify();
-                    }
-                })
-                .is_err()
-            {
-                break;
+    pub fn new(display_id: Option<DisplayId>, cx: &mut Context<Self>) -> Self {
+        let (tx, rx) = async_channel::bounded::<NetEvent>(8);
+        net_info::spawn_netlink_worker(tx);
+
+        cx.spawn(async move |this, cx| {
+            while let Ok(evt) = rx.recv().await {
+                if this
+                    .update(cx, |m, cx| match evt {
+                        NetEvent::Snapshot(v) => {
+                            if m.interfaces != v {
+                                m.interfaces = v;
+                                cx.notify();
+                            }
+                        }
+                        NetEvent::Rates(r) => {
+                            if m.rates != r {
+                                m.rates = r;
+                                cx.notify();
+                            }
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
             }
         })
         .detach();
 
         NetworkModule {
-            state: read_network(),
+            interfaces: Vec::new(),
+            rates: HashMap::new(),
+            display_id,
+            popup: None,
+        }
+    }
+
+    fn open_popup(&mut self, cx: &mut gpui::App) {
+        if self.popup.is_some() {
+            return;
+        }
+        let (tx, rx) = async_channel::bounded::<NetEvent>(8);
+        net_info::spawn_netlink_worker(tx);
+
+        let opts = WindowOptions {
+            titlebar: None,
+            window_bounds: Some(WindowBounds::Windowed(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: Size::new(px(420.), px(260.)),
+            })),
+            display_id: self.display_id,
+            app_id: Some("zbar-netinfo".to_string()),
+            window_background: WindowBackgroundAppearance::Transparent,
+            kind: WindowKind::LayerShell(LayerShellOptions {
+                namespace: "zbar-netinfo".to_string(),
+                layer: Layer::Top,
+                anchor: Anchor::TOP | Anchor::RIGHT,
+                margin: Some((px(0.), px(8.), px(0.), px(0.))),
+                keyboard_interactivity: KeyboardInteractivity::OnDemand,
+                exclusive_zone: None,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        match cx.open_window(opts, |_, cx| cx.new(|cx| NetworkPopup::new(rx, cx))) {
+            Ok(handle) => self.popup = Some(handle),
+            Err(e) => tracing::warn!("failed to open network popup: {e}"),
+        }
+    }
+
+    fn close_popup(&mut self, cx: &mut gpui::App) {
+        if let Some(handle) = self.popup.take() {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
         }
     }
 }
 
-fn read_network() -> NetState {
-    if let Some(ssid) = read_wifi_ssid() {
-        return NetState::Wifi { ssid };
-    }
-    if is_ethernet_up() {
-        return NetState::Ethernet;
-    }
-    NetState::Disconnected
-}
-
-fn read_wifi_ssid() -> Option<String> {
-    let output = Command::new("iwgetid").arg("-r").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let ssid = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if ssid.is_empty() {
-        None
+fn physical_label(iface: &IfaceSnapshot) -> &str {
+    if iface.is_wireless {
+        iface
+            .wifi_ssid
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(iface.name.as_str())
     } else {
-        Some(ssid)
+        iface.name.as_str()
     }
-}
-
-fn is_ethernet_up() -> bool {
-    let Ok(entries) = fs::read_dir("/sys/class/net") else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name == "lo" || name.starts_with("wl") {
-            continue;
-        }
-        if let Ok(state) = fs::read_to_string(format!("/sys/class/net/{name}/operstate")) {
-            if state.trim() == "up" {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 impl Render for NetworkModule {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let (icon, label, icon_color, text_color) = match &self.state {
-            NetState::Wifi { ssid } => ("󰤨", ssid.as_str(), theme::green(), theme::fg_dim()),
-            NetState::Ethernet => ("󰈀", "Eth", theme::green(), theme::fg_dim()),
-            NetState::Disconnected => ("󰤭", "Off", theme::urgent(), theme::urgent()),
-        };
-        theme::pill()
-            .bg(gpui::Hsla::transparent_black())
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity().clone();
+
+        let physicals: Vec<&IfaceSnapshot> =
+            self.interfaces.iter().filter(|i| i.is_physical).collect();
+
+        let mut row = div()
+            .id("zbar-network-row")
             .flex()
             .items_center()
-            .gap_0p5()
-            .child(div().text_color(icon_color).child(icon.to_string()))
-            .child(div().text_color(text_color).child(label.to_string()))
+            .gap_1()
+            .cursor_pointer()
+            .on_hover(move |hovered, _w, cx| {
+                let hovered = *hovered;
+                entity.update(cx, |m, cx| {
+                    if hovered {
+                        m.open_popup(cx);
+                    } else {
+                        m.close_popup(cx);
+                    }
+                });
+            });
+
+        if physicals.is_empty() {
+            row = row.child(
+                theme::pill()
+                    .bg(gpui::Hsla::transparent_black())
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(div().text_color(theme::urgent()).child("󰤭"))
+                    .child(div().text_color(theme::urgent()).child("Off")),
+            );
+            return row;
+        }
+
+        for iface in physicals {
+            let idx = iface.index;
+            let up = iface.operstate.is_up();
+            let icon = if iface.is_wireless { "󰤨" } else { "󰈀" };
+            let icon_color = if up { theme::green() } else { theme::urgent() };
+            let text_color = if up { theme::fg_dim() } else { theme::urgent() };
+            let label = physical_label(iface).to_string();
+
+            let mut pill = theme::pill()
+                .bg(gpui::Hsla::transparent_black())
+                .flex()
+                .items_center()
+                .gap_0p5()
+                .child(div().text_color(icon_color).child(icon.to_string()))
+                .child(div().text_color(text_color).child(label));
+
+            if up {
+                let (rx, tx) = self.rates.get(&idx).copied().unwrap_or((0.0, 0.0));
+                let rate = format!("↓{} ↑{}", format_rate_short(rx), format_rate_short(tx));
+                pill = pill.child(
+                    div()
+                        .w(px(78.))
+                        .flex()
+                        .justify_end()
+                        .overflow_x_hidden()
+                        .text_color(theme::fg_dim())
+                        .child(rate),
+                );
+            }
+
+            row = row.child(pill);
+        }
+        row
     }
 }

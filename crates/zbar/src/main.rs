@@ -20,6 +20,7 @@ fn main() {
     let backend = zbar::backend::detect::detect_backend();
 
     application().run(move |cx: &mut App| {
+        cx.bind_keys(zbar::modules::network_popup::key_bindings());
         let backend = backend.clone();
         // Wayland output events arrive asynchronously after bind; wait briefly so
         // cx.displays() can return every monitor instead of racing the roundtrip.
@@ -76,7 +77,7 @@ fn open_bar(
             }),
             ..Default::default()
         },
-        |_, cx| cx.new(|cx| Bar::new(backend, cx)),
+        |_, cx| cx.new(|cx| Bar::new(backend, display_id, cx)),
     );
     if let Err(e) = result {
         tracing::warn!("failed to open zbar window on display {display_id:?}: {e:#}");
