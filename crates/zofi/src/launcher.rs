@@ -38,15 +38,49 @@ enum LeftPane {
     Mimes,
 }
 
+/// Cursor + scroll state for one of the left-column lists. Items pane and
+/// mimes pane each own one of these.
+struct Pane {
+    selected: usize,
+    scroll: UniformListScrollHandle,
+}
+
+impl Pane {
+    fn new() -> Self {
+        Self {
+            selected: 0,
+            scroll: UniformListScrollHandle::new(),
+        }
+    }
+
+    fn move_up(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+        self.scroll
+            .scroll_to_item(self.selected, ScrollStrategy::Nearest);
+    }
+
+    fn move_down(&mut self, len: usize) {
+        if len > 0 {
+            self.selected = (self.selected + 1).min(len - 1);
+        }
+        self.scroll
+            .scroll_to_item(self.selected, ScrollStrategy::Nearest);
+    }
+
+    fn reset(&mut self) {
+        self.selected = 0;
+        self.scroll.scroll_to_item(0, ScrollStrategy::Top);
+    }
+}
+
 pub struct Launcher {
     sources: Vec<Option<Box<dyn Source>>>,
     active: usize,
     filtered: Vec<usize>,
-    selected: usize,
+    items: Pane,
+    mimes: Pane,
     /// Toggled by Tab — only meaningful when the selected item has ≥2 mimes.
     left_pane: LeftPane,
-    /// Index into `mime_cache` while in `Mimes` mode.
-    mime_selected: usize,
     /// Captured at toggle time so per-frame render avoids cloning Vec<String>
     /// out of the source on every list row. Empty in `Items` mode.
     mime_cache: Vec<String>,
@@ -54,8 +88,6 @@ pub struct Launcher {
     primary_mime_ix: usize,
     text_input: Entity<TextInput>,
     focus_handle: FocusHandle,
-    scroll_handle: UniformListScrollHandle,
-    mime_scroll_handle: UniformListScrollHandle,
 }
 
 impl Launcher {
@@ -87,20 +119,18 @@ impl Launcher {
             sources,
             active,
             filtered,
-            selected: 0,
+            items: Pane::new(),
+            mimes: Pane::new(),
             left_pane: LeftPane::Items,
-            mime_selected: 0,
             mime_cache: Vec::new(),
             primary_mime_ix: usize::MAX,
             text_input,
             focus_handle: cx.focus_handle(),
-            scroll_handle: UniformListScrollHandle::new(),
-            mime_scroll_handle: UniformListScrollHandle::new(),
         }
     }
 
     fn refresh_mime_cache(&mut self) {
-        let item_ix = match self.filtered.get(self.selected) {
+        let item_ix = match self.filtered.get(self.items.selected) {
             Some(&i) => i,
             None => {
                 self.mime_cache.clear();
@@ -128,11 +158,10 @@ impl Launcher {
         }
         self.active = ix;
         self.filtered = self.sources[ix].as_ref().unwrap().filter("");
-        self.selected = 0;
+        self.items.reset();
+        self.mimes.reset();
         self.left_pane = LeftPane::Items;
-        self.mime_selected = 0;
         self.mime_cache.clear();
-        self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
 
         let placeholder = self.sources[ix].as_ref().unwrap().placeholder();
         self.text_input.update(cx, |input, cx| {
@@ -145,26 +174,19 @@ impl Launcher {
 
     fn update_filter(&mut self, query: &str) {
         self.filtered = self.source().filter(query);
-        self.selected = 0;
+        self.items.reset();
+        self.mimes.reset();
         self.left_pane = LeftPane::Items;
-        self.mime_selected = 0;
         self.mime_cache.clear();
-        self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
     }
 
     fn move_up(&mut self, _: &MoveUp, _: &mut Window, cx: &mut Context<Self>) {
         match self.left_pane {
             LeftPane::Items => {
-                self.selected = self.selected.saturating_sub(1);
-                self.mime_selected = 0;
-                self.scroll_handle
-                    .scroll_to_item(self.selected, ScrollStrategy::Nearest);
+                self.items.move_up();
+                self.mimes.reset();
             }
-            LeftPane::Mimes => {
-                self.mime_selected = self.mime_selected.saturating_sub(1);
-                self.mime_scroll_handle
-                    .scroll_to_item(self.mime_selected, ScrollStrategy::Nearest);
-            }
+            LeftPane::Mimes => self.mimes.move_up(),
         }
         cx.notify();
     }
@@ -172,30 +194,19 @@ impl Launcher {
     fn move_down(&mut self, _: &MoveDown, _: &mut Window, cx: &mut Context<Self>) {
         match self.left_pane {
             LeftPane::Items => {
-                if !self.filtered.is_empty() {
-                    self.selected = (self.selected + 1).min(self.filtered.len() - 1);
-                }
-                self.mime_selected = 0;
-                self.scroll_handle
-                    .scroll_to_item(self.selected, ScrollStrategy::Nearest);
+                self.items.move_down(self.filtered.len());
+                self.mimes.reset();
             }
-            LeftPane::Mimes => {
-                let len = self.mime_cache.len();
-                if len > 0 {
-                    self.mime_selected = (self.mime_selected + 1).min(len - 1);
-                }
-                self.mime_scroll_handle
-                    .scroll_to_item(self.mime_selected, ScrollStrategy::Nearest);
-            }
+            LeftPane::Mimes => self.mimes.move_down(self.mime_cache.len()),
         }
         cx.notify();
     }
 
     fn confirm(&mut self, _: &Confirm, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(&idx) = self.filtered.get(self.selected) {
+        if let Some(&idx) = self.filtered.get(self.items.selected) {
             match self.left_pane {
                 LeftPane::Items => self.source().activate(idx),
-                LeftPane::Mimes => match self.mime_cache.get(self.mime_selected) {
+                LeftPane::Mimes => match self.mime_cache.get(self.mimes.selected) {
                     Some(mime) => self.source().activate_with_mime(idx, mime),
                     None => self.source().activate(idx),
                 },
@@ -227,9 +238,7 @@ impl Launcher {
                     return;
                 }
                 self.left_pane = LeftPane::Mimes;
-                self.mime_selected = 0;
-                self.mime_scroll_handle
-                    .scroll_to_item(0, ScrollStrategy::Top);
+                self.mimes.reset();
             }
             LeftPane::Mimes => {
                 self.left_pane = LeftPane::Items;
@@ -251,7 +260,7 @@ impl Launcher {
 
     fn render_row(&self, list_ix: usize) -> gpui::Stateful<gpui::Div> {
         let entry_ix = self.filtered[list_ix];
-        let sel = list_ix == self.selected;
+        let sel = list_ix == self.items.selected;
         let content = self.source().render_item(entry_ix, sel);
 
         let mut row = div().h(theme::ITEM_HEIGHT).py(px(2.0));
@@ -283,7 +292,7 @@ impl Launcher {
         mime: &str,
         primary: bool,
     ) -> gpui::Stateful<gpui::Div> {
-        let sel = list_ix == self.mime_selected;
+        let sel = list_ix == self.mimes.selected;
         let label = if primary {
             format!("● {mime}")
         } else {
@@ -332,7 +341,7 @@ impl Launcher {
     }
 
     fn render_preview_pane(&self) -> AnyElement {
-        let item_ix = match self.filtered.get(self.selected) {
+        let item_ix = match self.filtered.get(self.items.selected) {
             Some(&i) => i,
             None => {
                 return div()
@@ -343,7 +352,7 @@ impl Launcher {
         };
         let preview = match self.left_pane {
             LeftPane::Items => self.source().preview(item_ix),
-            LeftPane::Mimes => match self.mime_cache.get(self.mime_selected) {
+            LeftPane::Mimes => match self.mime_cache.get(self.mimes.selected) {
                 Some(m) => self.source().preview_for_mime(item_ix, m),
                 None => self.source().preview(item_ix),
             },
@@ -439,7 +448,7 @@ impl Render for Launcher {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let count = self.filtered.len();
         let pos = if count > 0 {
-            format!("{}/{}", self.selected + 1, count)
+            format!("{}/{}", self.items.selected + 1, count)
         } else {
             "0/0".to_string()
         };
@@ -458,7 +467,7 @@ impl Render for Launcher {
                                 .collect::<Vec<_>>()
                         }),
                     )
-                    .track_scroll(&self.scroll_handle)
+                    .track_scroll(&self.items.scroll)
                     .size_full(),
                 )
                 .into_any_element(),
@@ -494,7 +503,7 @@ impl Render for Launcher {
                                 .collect::<Vec<_>>()
                         }),
                     )
-                    .track_scroll(&self.mime_scroll_handle)
+                    .track_scroll(&self.mimes.scroll)
                     .size_full(),
                 )
                 .into_any_element(),
