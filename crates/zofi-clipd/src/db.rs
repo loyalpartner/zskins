@@ -176,8 +176,10 @@ impl Db {
             return Ok(out);
         }
 
-        let mut by_uuid: std::collections::HashMap<&str, &mut Vec<MimeContent>> =
-            out.iter_mut().map(|e| (e.uuid.as_str(), &mut e.mimes)).collect();
+        let mut by_uuid: std::collections::HashMap<&str, &mut Vec<MimeContent>> = out
+            .iter_mut()
+            .map(|e| (e.uuid.as_str(), &mut e.mimes))
+            .collect();
 
         let placeholders = std::iter::repeat_n("?", by_uuid.len())
             .collect::<Vec<_>>()
@@ -236,16 +238,17 @@ impl Db {
     }
 
     fn load_mimes(&self, uuid: &str) -> Result<Vec<MimeContent>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT mime, content FROM mimes WHERE item_uuid = ?1 ORDER BY mime",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT mime, content FROM mimes WHERE item_uuid = ?1 ORDER BY mime")?;
         let rows = stmt.query_map(params![uuid], |r| {
             Ok(MimeContent {
                 mime: r.get(0)?,
                 content: r.get(1)?,
             })
         })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn prune(&self, keep: usize) -> Result<usize> {

@@ -1,4 +1,6 @@
+mod assets;
 mod clipd;
+mod highlight;
 mod input;
 mod launcher;
 mod source;
@@ -32,6 +34,11 @@ pub const SOURCES: &[SourceEntry] = &[
         name: "clipboard",
         icon: "▤",
         factory: || Box::new(sources::clipboard::ClipboardSource::load()),
+    },
+    SourceEntry {
+        name: "files",
+        icon: "▦",
+        factory: || Box::new(sources::files::FilesSource::load()),
     },
 ];
 
@@ -73,34 +80,40 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| {
                 eprintln!(
                     "zofi: unknown source `{name}` (available: {})",
-                    SOURCES.iter().map(|s| s.name).collect::<Vec<_>>().join(", ")
+                    SOURCES
+                        .iter()
+                        .map(|s| s.name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 );
                 std::process::exit(2);
             }),
     };
 
-    application().run(move |cx: &mut App| {
-        cx.bind_keys(launcher::key_bindings());
+    application()
+        .with_assets(assets::Assets)
+        .run(move |cx: &mut App| {
+            cx.bind_keys(launcher::key_bindings());
 
-        cx.open_window(
-            WindowOptions {
-                titlebar: None,
-                window_bounds: Some(WindowBounds::Windowed(Bounds::maximized(None, cx))),
-                app_id: Some("zofi".to_string()),
-                window_background: WindowBackgroundAppearance::Transparent,
-                kind: WindowKind::LayerShell(LayerShellOptions {
-                    namespace: "zofi".to_string(),
-                    layer: Layer::Overlay,
-                    anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
-                    exclusive_zone: None,
-                    keyboard_interactivity: KeyboardInteractivity::Exclusive,
+            cx.open_window(
+                WindowOptions {
+                    titlebar: None,
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::maximized(None, cx))),
+                    app_id: Some("zofi".to_string()),
+                    window_background: WindowBackgroundAppearance::Transparent,
+                    kind: WindowKind::LayerShell(LayerShellOptions {
+                        namespace: "zofi".to_string(),
+                        layer: Layer::Overlay,
+                        anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+                        exclusive_zone: None,
+                        keyboard_interactivity: KeyboardInteractivity::Exclusive,
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            },
-            |window, cx| cx.new(|cx| launcher::Launcher::new(initial_ix, window, cx)),
-        )
-        .expect("failed to open zofi window: check compositor supports layer-shell");
-    });
+                },
+                |window, cx| cx.new(|cx| launcher::Launcher::new(initial_ix, window, cx)),
+            )
+            .expect("failed to open zofi window: check compositor supports layer-shell");
+        });
     Ok(())
 }

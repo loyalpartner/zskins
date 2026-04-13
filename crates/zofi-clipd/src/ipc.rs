@@ -24,10 +24,7 @@ pub enum Request {
     /// Touch the item's `last_used_at` and become the wayland selection
     /// holder serving its content. `mime` selects which representation to
     /// serve; `None` falls back to the item's `primary_mime`.
-    Activate {
-        uuid: String,
-        mime: Option<String>,
-    },
+    Activate { uuid: String, mime: Option<String> },
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -1,11 +1,12 @@
 use gpui::{
-    actions, div, img, prelude::*, px, uniform_list, AnyElement, App, Context, Entity,
-    FocusHandle, Focusable, FontWeight, KeyBinding, MouseButton, ObjectFit, ScrollStrategy,
-    UniformListScrollHandle, Window,
+    actions, div, img, prelude::*, px, uniform_list, AnyElement, App, Context, Entity, FocusHandle,
+    Focusable, FontWeight, HighlightStyle, KeyBinding, MouseButton, ObjectFit, ScrollStrategy,
+    StyledText, UniformListScrollHandle, Window,
 };
 
+use crate::highlight;
 use crate::input::TextInput;
-use crate::source::{Layout, Preview, Source};
+use crate::source::{ActivateOutcome, Layout, Preview, Source};
 use crate::theme;
 use crate::SOURCES;
 
@@ -13,7 +14,15 @@ const PREVIEW_TEXT_MAX_LINES: usize = 200;
 
 actions!(
     zofi,
-    [MoveUp, MoveDown, Confirm, Dismiss, NextSource, PrevSource, ToggleMimePane]
+    [
+        MoveUp,
+        MoveDown,
+        Confirm,
+        Dismiss,
+        NextSource,
+        PrevSource,
+        ToggleMimePane
+    ]
 );
 
 pub fn key_bindings() -> Vec<KeyBinding> {
@@ -93,7 +102,9 @@ pub struct Launcher {
 impl Launcher {
     pub fn new(initial: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut sources: Vec<Option<Box<dyn Source>>> = (0..SOURCES.len()).map(|_| None).collect();
-        sources[initial] = Some((SOURCES[initial].factory)());
+        let mut new_source = (SOURCES[initial].factory)();
+        wire_pulse(new_source.as_mut(), cx);
+        sources[initial] = Some(new_source);
         let active = initial;
 
         let active_source = sources[active].as_ref().unwrap();
@@ -154,7 +165,9 @@ impl Launcher {
             return;
         }
         if self.sources[ix].is_none() {
-            self.sources[ix] = Some((SOURCES[ix].factory)());
+            let mut new_source = (SOURCES[ix].factory)();
+            wire_pulse(new_source.as_mut(), cx);
+            self.sources[ix] = Some(new_source);
         }
         self.active = ix;
         self.filtered = self.sources[ix].as_ref().unwrap().filter("");
@@ -180,6 +193,16 @@ impl Launcher {
         self.mime_cache.clear();
     }
 
+    /// Re-runs the source's filter without resetting the user's cursor.
+    /// Called from pulse — async sources grow `entries` while the user is
+    /// already navigating; we just want the new matches to show up.
+    fn refilter(&mut self, query: &str) {
+        self.filtered = self.source().filter(query);
+        if self.items.selected >= self.filtered.len() {
+            self.items.selected = self.filtered.len().saturating_sub(1);
+        }
+    }
+
     fn move_up(&mut self, _: &MoveUp, _: &mut Window, cx: &mut Context<Self>) {
         match self.left_pane {
             LeftPane::Items => {
@@ -203,16 +226,25 @@ impl Launcher {
     }
 
     fn confirm(&mut self, _: &Confirm, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(&idx) = self.filtered.get(self.items.selected) {
-            match self.left_pane {
+        let outcome = match self.filtered.get(self.items.selected) {
+            Some(&idx) => match self.left_pane {
                 LeftPane::Items => self.source().activate(idx),
                 LeftPane::Mimes => match self.mime_cache.get(self.mimes.selected) {
                     Some(mime) => self.source().activate_with_mime(idx, mime),
                     None => self.source().activate(idx),
                 },
+            },
+            None => ActivateOutcome::Quit,
+        };
+        match outcome {
+            ActivateOutcome::Quit => cx.quit(),
+            ActivateOutcome::Refresh => {
+                self.text_input
+                    .update(cx, |input, cx| input.set_text("", cx));
+                self.update_filter("");
+                cx.notify();
             }
         }
-        cx.quit();
     }
 
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
@@ -224,12 +256,7 @@ impl Launcher {
         }
     }
 
-    fn toggle_mime_pane(
-        &mut self,
-        _: &ToggleMimePane,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn toggle_mime_pane(&mut self, _: &ToggleMimePane, _: &mut Window, cx: &mut Context<Self>) {
         match self.left_pane {
             LeftPane::Items => {
                 self.refresh_mime_cache();
@@ -275,7 +302,13 @@ impl Launcher {
             );
         } else {
             row = row
-                .child(div().size_full().mx(px(6.0)).rounded(theme::ITEM_RADIUS).child(content))
+                .child(
+                    div()
+                        .size_full()
+                        .mx(px(6.0))
+                        .rounded(theme::ITEM_RADIUS)
+                        .child(content),
+                )
                 .hover(|s| s.bg(theme::hover_bg()));
         }
 
@@ -305,11 +338,7 @@ impl Launcher {
             .flex()
             .items_center()
             .text_size(theme::FONT_SIZE)
-            .text_color(if sel {
-                theme::fg_accent()
-            } else {
-                theme::fg()
-            })
+            .text_color(if sel { theme::fg_accent() } else { theme::fg() })
             .child(label);
 
         let mut row = div().h(theme::ITEM_HEIGHT).py(px(2.0));
@@ -333,22 +362,18 @@ impl Launcher {
                 )
                 .hover(|s| s.bg(theme::hover_bg()));
         }
-        row.id(("mime", list_ix))
-            .cursor_pointer()
-            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+        row.id(("mime", list_ix)).cursor_pointer().on_mouse_down(
+            MouseButton::Left,
+            move |_, _, cx| {
                 cx.dispatch_action(&Confirm);
-            })
+            },
+        )
     }
 
     fn render_preview_pane(&self) -> AnyElement {
         let item_ix = match self.filtered.get(self.items.selected) {
             Some(&i) => i,
-            None => {
-                return div()
-                    .size_full()
-                    .bg(theme::preview_bg())
-                    .into_any_element()
-            }
+            None => return div().size_full().bg(theme::preview_bg()).into_any_element(),
         };
         let preview = match self.left_pane {
             LeftPane::Items => self.source().preview(item_ix),
@@ -366,9 +391,6 @@ impl Launcher {
             .overflow_hidden();
         match preview {
             Some(Preview::Text(s)) => {
-                // Soft-wrap long lines and let the pane scroll vertically when
-                // the content overflows. We collect lines into a single string
-                // (capped) so wrapping happens within each source line.
                 let body: String = s
                     .lines()
                     .take(PREVIEW_TEXT_MAX_LINES)
@@ -380,6 +402,33 @@ impl Launcher {
                     .line_height(px(22.0))
                     .text_color(theme::fg())
                     .child(body)
+                    .into_any_element()
+            }
+            Some(Preview::Code { text, lang }) => {
+                let body: String = text
+                    .lines()
+                    .take(PREVIEW_TEXT_MAX_LINES)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let runs = highlight::highlight(&body, &lang, theme::fg());
+                let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = runs
+                    .into_iter()
+                    .map(|(r, color)| {
+                        (
+                            r,
+                            HighlightStyle {
+                                color: Some(color),
+                                ..Default::default()
+                            },
+                        )
+                    })
+                    .collect();
+                pane.id("preview-code")
+                    .overflow_y_scroll()
+                    .text_size(theme::PREVIEW_FONT_SIZE)
+                    .line_height(px(22.0))
+                    .text_color(theme::fg())
+                    .child(StyledText::new(body).with_highlights(highlights))
                     .into_any_element()
             }
             Some(Preview::Image(image)) => pane
@@ -406,11 +455,7 @@ impl Launcher {
     }
 
     fn render_source_bar(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let mut bar = div()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .pl(theme::PAD_X);
+        let mut bar = div().flex().items_center().gap(px(8.0)).pl(theme::PAD_X);
         for (ix, entry) in SOURCES.iter().enumerate() {
             let sel = ix == self.active;
             let id = ("source-tab", ix);
@@ -420,7 +465,11 @@ impl Launcher {
             } else {
                 gpui::transparent_black()
             };
-            let fg = if sel { theme::fg_accent() } else { theme::fg_dim() };
+            let fg = if sel {
+                theme::fg_accent()
+            } else {
+                theme::fg_dim()
+            };
             let entity = cx.entity().downgrade();
             let tab = div()
                 .id(id)
@@ -435,7 +484,17 @@ impl Launcher {
                 .child(icon)
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     if let Some(this) = entity.upgrade() {
-                        this.update(cx, |this, cx| this.switch_source(ix, window, cx));
+                        this.update(cx, |this, cx| {
+                            this.switch_source(ix, window, cx);
+                            // Defer focus restore until after this event
+                            // cycle — calling window.focus inline runs before
+                            // GPUI's own mouse-event handling, which then
+                            // moves focus to the clicked element.
+                            let handle = this.text_input.focus_handle(cx);
+                            cx.defer_in(window, move |_, window, cx| {
+                                window.focus(&handle, cx);
+                            });
+                        });
                     }
                 });
             bar = bar.child(tab);
@@ -462,9 +521,7 @@ impl Render for Launcher {
                         "row-list",
                         count,
                         cx.processor(|this, range: std::ops::Range<usize>, _w, _cx| {
-                            range
-                                .map(|ix| this.render_row(ix))
-                                .collect::<Vec<_>>()
+                            range.map(|ix| this.render_row(ix)).collect::<Vec<_>>()
                         }),
                     )
                     .track_scroll(&self.items.scroll)
@@ -489,16 +546,9 @@ impl Render for Launcher {
                         cx.processor(|this, range: std::ops::Range<usize>, _w, _cx| {
                             range
                                 .map(|ix| {
-                                    let mime = this
-                                        .mime_cache
-                                        .get(ix)
-                                        .map(String::as_str)
-                                        .unwrap_or("");
-                                    this.render_mime_row(
-                                        ix,
-                                        mime,
-                                        ix == this.primary_mime_ix,
-                                    )
+                                    let mime =
+                                        this.mime_cache.get(ix).map(String::as_str).unwrap_or("");
+                                    this.render_mime_row(ix, mime, ix == this.primary_mime_ix)
                                 })
                                 .collect::<Vec<_>>()
                         }),
@@ -647,4 +697,29 @@ fn key_hint(label: &str, key: &str) -> gpui::Div {
                 .child(label.to_string()),
         )
         .child(div().text_color(theme::fg_dim()).child(key.to_string()))
+}
+
+/// Subscribe to a source's growth pulses and re-render on each. Used by
+/// async sources (filesystem walk, future network fetches) so the UI
+/// reflects new entries as they arrive — fzf-style.
+/// Subscribe to a source's growth pulses and refresh the filtered list,
+/// preserving the user's cursor position. Used by sources that grow
+/// asynchronously (filesystem walk).
+fn wire_pulse(source: &mut dyn Source, cx: &mut Context<Launcher>) {
+    let Some(rx) = source.take_pulse() else {
+        return;
+    };
+    cx.spawn(async move |weak, cx| {
+        while rx.recv().await.is_ok() {
+            let updated = weak.update(cx, |this, cx| {
+                let query = this.text_input.read(cx).content().clone();
+                this.refilter(&query);
+                cx.notify();
+            });
+            if updated.is_err() {
+                break;
+            }
+        }
+    })
+    .detach();
 }

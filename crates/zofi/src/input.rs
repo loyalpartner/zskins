@@ -104,6 +104,10 @@ impl TextInput {
         self.on_change = Some(callback);
     }
 
+    pub fn content(&self) -> &SharedString {
+        &self.content
+    }
+
     pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>) {
         self.placeholder = placeholder.into();
     }

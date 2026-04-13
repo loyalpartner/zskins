@@ -4,7 +4,24 @@ use gpui::{AnyElement, Image};
 
 pub enum Preview {
     Text(String),
+    /// Plain text + a language hint for syntax highlighting (e.g. "rs", "py").
+    /// The launcher renders via the syntect-backed highlighter; unknown langs
+    /// fall back to plain text.
+    Code {
+        text: String,
+        lang: String,
+    },
     Image(Arc<Image>),
+}
+
+/// What the launcher does after `activate` / `activate_with_mime` returns.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum ActivateOutcome {
+    /// Quit zofi. Standard launch / paste / open behavior.
+    Quit,
+    /// Stay open and refresh the listing. Source has mutated its own state
+    /// (e.g. file picker navigated into a directory).
+    Refresh,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -29,7 +46,7 @@ pub trait Source: 'static {
     /// click handling live in the launcher.
     fn render_item(&self, ix: usize, selected: bool) -> AnyElement;
 
-    fn activate(&self, ix: usize);
+    fn activate(&self, ix: usize) -> ActivateOutcome;
 
     /// Preview content for the given index. Only consulted when
     /// `layout()` is `ListAndPreview`.
@@ -63,7 +80,7 @@ pub trait Source: 'static {
     }
 
     /// Activate using a specific mime. Default delegates to `activate`.
-    fn activate_with_mime(&self, ix: usize, _mime: &str) {
+    fn activate_with_mime(&self, ix: usize, _mime: &str) -> ActivateOutcome {
         self.activate(ix)
     }
 
@@ -75,6 +92,14 @@ pub trait Source: 'static {
     /// warnings). The launcher reserves space for it; sources that don't need
     /// one return None.
     fn banner(&self) -> Option<AnyElement> {
+        None
+    }
+
+    /// Optional pulse channel for sources that grow asynchronously (e.g. a
+    /// background filesystem walk). Each `()` on the channel asks the
+    /// launcher to re-render so the new entries become visible. The launcher
+    /// takes the receiver once on construction; subsequent calls return None.
+    fn take_pulse(&mut self) -> Option<async_channel::Receiver<()>> {
         None
     }
 }

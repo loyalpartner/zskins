@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 
 use gpui::{div, img, prelude::*, AnyElement, FontWeight, ObjectFit};
 
-use crate::source::Source;
+use crate::source::{ActivateOutcome, Source};
 use crate::theme;
 
 pub use desktop::DesktopEntry;
@@ -86,8 +86,9 @@ impl Source for AppsSource {
             .into_any_element()
     }
 
-    fn activate(&self, ix: usize) {
+    fn activate(&self, ix: usize) -> ActivateOutcome {
         launch(&self.entries[ix]);
+        ActivateOutcome::Quit
     }
 }
 

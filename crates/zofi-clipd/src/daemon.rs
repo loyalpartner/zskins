@@ -180,9 +180,7 @@ pub fn run(db: Db) -> Result<(), DaemonError> {
         if ipc_ready {
             loop {
                 match listener.accept() {
-                    Ok((stream, _)) => {
-                        handle_ipc(stream, &mut state, &db, &device, &manager, &qh)
-                    }
+                    Ok((stream, _)) => handle_ipc(stream, &mut state, &db, &device, &manager, &qh),
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                     Err(e) => {
                         tracing::warn!("ipc accept: {e}");
@@ -294,7 +292,11 @@ fn hold_selection(
     state.held_mime = mime;
     state.held_content = content;
     state.held_source = Some(source);
-    tracing::debug!("now serving {} bytes of {}", state.held_content.len(), state.held_mime);
+    tracing::debug!(
+        "now serving {} bytes of {}",
+        state.held_content.len(),
+        state.held_mime
+    );
 }
 
 fn process_offer(
@@ -308,7 +310,8 @@ fn process_offer(
         .get(&offer.id())
         .cloned()
         .unwrap_or_default();
-    let (kind, primary_mime) = pick_mime(&mimes).ok_or_else(|| OfferError::NoMime(mimes.clone()))?;
+    let (kind, primary_mime) =
+        pick_mime(&mimes).ok_or_else(|| OfferError::NoMime(mimes.clone()))?;
 
     let cap = match kind {
         Kind::Text => TEXT_CAP_BYTES,
@@ -390,9 +393,7 @@ fn worth_keeping(mime: &str, kind: Kind) -> bool {
     match kind {
         Kind::Text => {
             let m = mime.to_ascii_lowercase();
-            m.starts_with("text/")
-                || m == "utf8_string"
-                || m == "string"
+            m.starts_with("text/") || m == "utf8_string" || m == "string"
         }
         Kind::Image => mime.to_ascii_lowercase().starts_with("image/"),
     }
@@ -560,12 +561,7 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if state
-            .held_source
-            .as_ref()
-            .map(|s| s.id())
-            != Some(source.id())
-        {
+        if state.held_source.as_ref().map(|s| s.id()) != Some(source.id()) {
             return;
         }
         match event {

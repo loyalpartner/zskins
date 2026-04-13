@@ -12,7 +12,7 @@ use zofi_clipd::{
     paths, pidfile, Entry,
 };
 
-use crate::source::{Layout, Preview, Source};
+use crate::source::{ActivateOutcome, Layout, Preview, Source};
 use crate::theme;
 
 const LIST_LIMIT: usize = 500;
@@ -179,8 +179,9 @@ impl Source for ClipboardSource {
             .into_any_element()
     }
 
-    fn activate(&self, ix: usize) {
+    fn activate(&self, ix: usize) -> ActivateOutcome {
         self.activate_inner(ix, None);
+        ActivateOutcome::Quit
     }
 
     fn mimes(&self, ix: usize) -> Vec<String> {
@@ -217,8 +218,9 @@ impl Source for ClipboardSource {
         }
     }
 
-    fn activate_with_mime(&self, ix: usize, mime: &str) {
+    fn activate_with_mime(&self, ix: usize, mime: &str) -> ActivateOutcome {
         self.activate_inner(ix, Some(mime.to_string()));
+        ActivateOutcome::Quit
     }
 
     fn layout(&self) -> Layout {
@@ -295,7 +297,9 @@ fn spawn_daemon() -> std::io::Result<()> {
     // setsid in the child so the daemon survives zofi exiting.
     unsafe {
         cmd.pre_exec(|| {
-            nix::unistd::setsid().map(|_| ()).map_err(std::io::Error::from)
+            nix::unistd::setsid()
+                .map(|_| ())
+                .map_err(std::io::Error::from)
         });
     }
     let child = cmd.spawn()?;
@@ -324,4 +328,3 @@ fn daemon_warning(detail: &str) -> gpui::Div {
         .text_color(gpui::rgb(0xff_8a_8a))
         .child(format!("⚠ zofi-clipd not running: {detail}"))
 }
-
