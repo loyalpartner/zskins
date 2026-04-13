@@ -7250,19 +7250,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "zlauncher"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "gpui",
- "gpui_platform",
- "rayon",
- "tracing",
- "tracing-subscriber",
- "unicode-segmentation",
-]
-
-[[package]]
 name = "zlog"
 version = "0.1.0"
 source = "git+https://github.com/zed-industries/zed#45c0ced8b2ccee4229a6fb9c42a48bcdc6f83514"
@@ -7278,6 +7265,19 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[package]]
+name = "zofi"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui_platform",
+ "rayon",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-segmentation",
+]
 
 [[package]]
 name = "ztracing"

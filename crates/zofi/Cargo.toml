@@ -1,5 +1,5 @@
 [package]
-name = "zlauncher"
+name = "zofi"
 version.workspace = true
 edition.workspace = true
 
@@ -9,6 +9,5 @@ gpui_platform.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-# gtk4.workspace = true  # no longer needed for icon lookup
 unicode-segmentation.workspace = true
 rayon.workspace = true

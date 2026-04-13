@@ -1,16 +1,13 @@
-use std::process::{Command, Stdio};
-
 use gpui::{
-    actions, div, img, prelude::*, px, uniform_list, App, Context, Entity, FocusHandle, Focusable,
-    FontWeight, KeyBinding, MouseButton, ObjectFit, ScrollStrategy, UniformListScrollHandle,
-    Window,
+    actions, div, prelude::*, px, uniform_list, App, Context, Entity, FocusHandle, Focusable,
+    FontWeight, KeyBinding, MouseButton, ScrollStrategy, UniformListScrollHandle, Window,
 };
 
-use crate::desktop::{self, DesktopEntry};
 use crate::input::TextInput;
+use crate::source::Source;
 use crate::theme;
 
-actions!(zlauncher, [MoveUp, MoveDown, Confirm, Dismiss]);
+actions!(zofi, [MoveUp, MoveDown, Confirm, Dismiss]);
 
 pub fn key_bindings() -> Vec<KeyBinding> {
     let mut bindings = vec![
@@ -26,7 +23,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 }
 
 pub struct Launcher {
-    entries: Vec<DesktopEntry>,
+    source: Box<dyn Source>,
     filtered: Vec<usize>,
     selected: usize,
     text_input: Entity<TextInput>,
@@ -35,9 +32,9 @@ pub struct Launcher {
 }
 
 impl Launcher {
-    pub fn new(entries: Vec<DesktopEntry>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-        let text_input = cx.new(|cx| TextInput::new("Search applications...", cx));
+    pub fn new(source: Box<dyn Source>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let filtered = source.filter("");
+        let text_input = cx.new(|cx| TextInput::new(source.placeholder(), cx));
 
         let launcher_entity = cx.entity().downgrade();
         text_input.update(cx, |input, _cx| {
@@ -54,7 +51,7 @@ impl Launcher {
         window.focus(&text_input.focus_handle(cx), cx);
 
         Self {
-            entries,
+            source,
             filtered,
             selected: 0,
             text_input,
@@ -64,19 +61,7 @@ impl Launcher {
     }
 
     fn update_filter(&mut self, query: &str) {
-        self.filtered.clear();
-        let q = query.to_lowercase();
-        if q.is_empty() {
-            self.filtered.extend(0..self.entries.len());
-        } else {
-            self.filtered.extend(
-                self.entries
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, e)| e.search_key.contains(&q))
-                    .map(|(i, _)| i),
-            );
-        }
+        self.filtered = self.source.filter(query);
         self.selected = 0;
         self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
     }
@@ -99,7 +84,7 @@ impl Launcher {
 
     fn confirm(&mut self, _: &Confirm, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(&idx) = self.filtered.get(self.selected) {
-            launch(&self.entries[idx]);
+            self.source.activate(idx);
         }
         cx.quit();
     }
@@ -108,33 +93,10 @@ impl Launcher {
         cx.quit();
     }
 
-    fn render_item(&self, list_ix: usize) -> gpui::Stateful<gpui::Div> {
+    fn render_row(&self, list_ix: usize) -> gpui::Stateful<gpui::Div> {
         let entry_ix = self.filtered[list_ix];
-        let entry = &self.entries[entry_ix];
         let sel = list_ix == self.selected;
-
-        let icon = render_icon(entry);
-
-        let content = div()
-            .h_full()
-            .px(theme::PAD_X)
-            .flex()
-            .items_center()
-            .gap(theme::GAP)
-            .child(icon)
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_x_hidden()
-                    .text_size(theme::FONT_SIZE)
-                    .font_weight(if sel {
-                        FontWeight::MEDIUM
-                    } else {
-                        FontWeight::NORMAL
-                    })
-                    .text_color(if sel { theme::fg_accent() } else { theme::fg() })
-                    .child(entry.name.clone()),
-            );
+        let content = self.source.render_item(entry_ix, sel);
 
         let mut row = div().h(theme::ITEM_HEIGHT);
         if sel {
@@ -166,6 +128,7 @@ impl Render for Launcher {
         } else {
             "0/0".to_string()
         };
+        let empty_text = self.source.empty_text();
 
         div()
             .key_context("Launcher")
@@ -181,7 +144,6 @@ impl Render for Launcher {
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 cx.dispatch_action(&Dismiss);
             })
-            // ── Panel ───────────────────────────────────
             .child(
                 div()
                     .w(theme::PANEL_W)
@@ -194,7 +156,6 @@ impl Render for Launcher {
                     .border_color(theme::panel_border())
                     .overflow_hidden()
                     .on_mouse_down(MouseButton::Left, |_, _, _| {})
-                    // ── Search + counter ─────────────────
                     .child(
                         div()
                             .flex()
@@ -210,9 +171,7 @@ impl Render for Launcher {
                                     .child(pos),
                             ),
                     )
-                    // ── Separator ────────────────────────
                     .child(div().h(px(1.0)).bg(theme::bar_border()))
-                    // ── List ─────────────────────────────
                     .child(
                         div()
                             .flex_1()
@@ -221,15 +180,15 @@ impl Render for Launcher {
                             .child(if count > 0 {
                                 div().size_full().child(
                                     uniform_list(
-                                        "app-list",
+                                        "row-list",
                                         count,
-                                        cx.processor(|this, range, _window, _cx| {
-                                            let mut items = Vec::new();
-                                            for ix in range {
-                                                items.push(this.render_item(ix));
-                                            }
-                                            items
-                                        }),
+                                        cx.processor(
+                                            |this, range: std::ops::Range<usize>, _w, _cx| {
+                                                range
+                                                    .map(|ix| this.render_row(ix))
+                                                    .collect::<Vec<_>>()
+                                            },
+                                        ),
                                     )
                                     .track_scroll(&self.scroll_handle)
                                     .size_full(),
@@ -242,10 +201,9 @@ impl Render for Launcher {
                                     .justify_center()
                                     .text_color(theme::fg_dim())
                                     .text_size(theme::FONT_SIZE)
-                                    .child("No matching applications")
+                                    .child(empty_text)
                             }),
                     )
-                    // ── Bottom bar ───────────────────────
                     .child(
                         div()
                             .h(px(30.0))
@@ -282,47 +240,4 @@ fn key_hint(label: &str, key: &str) -> gpui::Div {
                 .child(label.to_string()),
         )
         .child(div().text_color(theme::fg_dim()).child(key.to_string()))
-}
-
-fn render_icon(entry: &DesktopEntry) -> gpui::Div {
-    if let Some(ref data) = entry.icon_data {
-        div().size(theme::ICON_SIZE).flex_shrink_0().child(
-            img(data.clone())
-                .size(theme::ICON_SIZE)
-                .object_fit(ObjectFit::Contain),
-        )
-    } else if let Some(ref path) = entry.icon_path {
-        div().size(theme::ICON_SIZE).flex_shrink_0().child(
-            img(path.clone())
-                .size(theme::ICON_SIZE)
-                .object_fit(ObjectFit::Contain),
-        )
-    } else {
-        div()
-            .size(theme::ICON_SIZE)
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_color(theme::fg_dim())
-            .text_size(theme::FONT_SIZE_SM)
-            .child("\u{25cb}")
-    }
-}
-
-fn launch(entry: &DesktopEntry) {
-    let exec = desktop::strip_field_codes(&entry.exec);
-    let parts: Vec<&str> = exec.split_whitespace().collect();
-    if let Some((cmd, args)) = parts.split_first() {
-        match Command::new(cmd)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(_) => tracing::info!("launched: {}", entry.name),
-            Err(e) => tracing::error!("failed to launch {}: {e}", entry.name),
-        }
-    }
 }

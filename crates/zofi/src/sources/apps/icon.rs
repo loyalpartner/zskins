@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
-use crate::desktop::DesktopEntry;
+use super::desktop::DesktopEntry;
 
 const EXTENSIONS: &[&str] = &["svg", "svgz", "png"];
 
