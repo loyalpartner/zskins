@@ -102,7 +102,39 @@ impl SwayConn {
 const MSG_RUN_COMMAND: u32 = 0;
 const MSG_GET_WORKSPACES: u32 = 1;
 const MSG_SUBSCRIBE: u32 = 2;
+const MSG_GET_OUTPUTS: u32 = 3;
 const EVENT_WORKSPACE: u32 = 0x80000000;
+
+#[derive(Deserialize)]
+struct RawOutputRect {
+    width: f64,
+}
+
+#[derive(Deserialize)]
+struct RawOutput {
+    name: String,
+    rect: RawOutputRect,
+}
+
+/// Query sway for output rects, returning a list of (name, logical_width).
+pub fn query_output_widths() -> Vec<(String, f32)> {
+    let Ok(mut conn) = SwayConn::connect() else {
+        return Vec::new();
+    };
+    if conn.send(MSG_GET_OUTPUTS, b"").is_err() {
+        return Vec::new();
+    }
+    let Ok((_ty, payload)) = conn.read_message() else {
+        return Vec::new();
+    };
+    let Ok(outputs) = serde_json::from_slice::<Vec<RawOutput>>(&payload) else {
+        return Vec::new();
+    };
+    outputs
+        .into_iter()
+        .map(|o| (o.name, o.rect.width as f32))
+        .collect()
+}
 
 #[derive(Default)]
 pub struct SwayBackend;
