@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{div, prelude::*, px, AnyElement, FontWeight, ImageFormat, SharedString};
-use zofi_clipd_core::{
+use zofi_clipd::{
     db::Db,
     ipc::{self, Request, Response},
     model::Kind,

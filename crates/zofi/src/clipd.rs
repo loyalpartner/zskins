@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use zofi_clipd_core::{daemon, db::Db, model::Kind, paths, pidfile::DaemonLock, preview};
+use zofi_clipd::{daemon, db::Db, model::Kind, paths, pidfile::DaemonLock, preview};
 
 pub fn run() -> Result<()> {
     let pid_path = paths::pid_path();
@@ -64,8 +64,8 @@ pub fn import(path: &PathBuf) -> Result<()> {
             &[],
             ts,
         ) {
-            Ok(zofi_clipd_core::db::RecordResult::Inserted(_)) => inserted += 1,
-            Ok(zofi_clipd_core::db::RecordResult::Existed(_)) => deduped += 1,
+            Ok(zofi_clipd::db::RecordResult::Inserted(_)) => inserted += 1,
+            Ok(zofi_clipd::db::RecordResult::Existed(_)) => deduped += 1,
             Err(e) => tracing::warn!("skip entry {rev_ix}: {e:#}"),
         }
     }

@@ -7484,11 +7484,11 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-segmentation",
- "zofi-clipd-core",
+ "zofi-clipd",
 ]
 
 [[package]]
-name = "zofi-clipd-core"
+name = "zofi-clipd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
