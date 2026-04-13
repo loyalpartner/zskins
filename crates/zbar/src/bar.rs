@@ -9,6 +9,7 @@ use zbar::modules::brightness::BrightnessModule;
 use zbar::modules::clock::ClockModule;
 use zbar::modules::cpu_mem::CpuMemModule;
 use zbar::modules::network::NetworkModule;
+use zbar::modules::tray::TrayModule;
 use zbar::modules::volume::VolumeModule;
 use zbar::modules::window_title::WindowTitleModule;
 use zbar::modules::workspaces::WorkspacesModule;
@@ -17,6 +18,7 @@ use zbar::theme;
 pub struct Bar {
     workspaces: Entity<WorkspacesModule>,
     window_title: Entity<WindowTitleModule>,
+    tray: Entity<TrayModule>,
     network: Entity<NetworkModule>,
     volume: Entity<VolumeModule>,
     brightness: Entity<BrightnessModule>,
@@ -34,6 +36,7 @@ impl Bar {
         Bar {
             workspaces: cx.new(|cx| WorkspacesModule::new(backend, cx)),
             window_title: cx.new(WindowTitleModule::new),
+            tray: cx.new(TrayModule::new),
             network: cx.new(|cx| NetworkModule::new(display_id, cx)),
             volume: cx.new(VolumeModule::new),
             brightness: cx.new(BrightnessModule::new),
@@ -82,6 +85,8 @@ impl Render for Bar {
                     .items_center()
                     .justify_end()
                     .gap(theme::MODULE_GAP)
+                    .child(self.tray.clone())
+                    .child(separator())
                     .child(self.network.clone())
                     .child(separator())
                     .child(self.volume.clone())

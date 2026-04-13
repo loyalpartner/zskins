@@ -7426,9 +7426,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
+ "async-io",
  "chrono",
+ "futures-lite 2.6.1",
  "gpui",
  "gpui_platform",
+ "image",
  "libc",
  "serde",
  "serde_json",
@@ -7436,6 +7439,7 @@ dependencies = [
  "tracing-subscriber",
  "wayland-client",
  "wayland-protocols",
+ "zbus",
 ]
 
 [[package]]
