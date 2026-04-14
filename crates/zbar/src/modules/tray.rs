@@ -1063,14 +1063,41 @@ fn find_icon_recursive(dir: &std::path::Path, name: &str, depth: u8) -> Option<s
 static NEXT_IMAGE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 fn load_icon_file(path: &std::path::Path) -> Option<TrayIcon> {
+    // Reject oversized icon files before reading/decoding — untrusted tray
+    // apps (or a malicious `IconThemePath`) could point at a huge file and
+    // block the SNI thread (all tray updates are serialized).
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.len() > MAX_ICON_BYTES as u64 {
+            tracing::warn!(
+                "tray icon file too large: {} bytes at {}",
+                meta.len(),
+                path.display()
+            );
+            return None;
+        }
+    }
     let bytes = std::fs::read(path).ok()?;
+    if bytes.len() > MAX_ICON_BYTES {
+        tracing::warn!(
+            "tray icon file too large: {} bytes at {}",
+            bytes.len(),
+            path.display()
+        );
+        return None;
+    }
     let ext = path.extension()?.to_str()?;
     let format = match ext {
         "svg" | "svgz" => gpui::ImageFormat::Svg,
         "png" => gpui::ImageFormat::Png,
         // ICO/BMP/etc: decode via `image` crate to RGBA pixels.
         "ico" | "bmp" | "jpg" | "jpeg" | "gif" => {
-            let mut img = image::load_from_memory(&bytes).ok()?.into_rgba8();
+            let mut img = match image::load_from_memory(&bytes) {
+                Ok(img) => img.into_rgba8(),
+                Err(err) => {
+                    tracing::warn!("tray icon decode failed for {}: {err}", path.display());
+                    return None;
+                }
+            };
             // Swap R↔B for BGRA — GPUI's RenderImage expects BGRA layout.
             for pixel in img.pixels_mut() {
                 pixel.0.swap(0, 2);
@@ -1122,17 +1149,53 @@ pub fn parse_address(address: &str) -> (&str, &str) {
 // Icon conversion
 // ---------------------------------------------------------------------------
 
+/// Maximum accepted dimension for a single tray icon side. Real tray icons
+/// are rendered at ~18px; 512 is already an order of magnitude larger than
+/// anything sensible. Rejecting larger values guards against integer
+/// overflow in `w * h * 4` and OOM from adversarial D-Bus peers.
+const MAX_ICON_DIM: i32 = 512;
+
+/// Hard cap on icon file size read from disk (4 MiB). Real tray icon assets
+/// are a few KiB; anything past this is almost certainly a malformed or
+/// malicious file pointed at by `IconThemePath`.
+const MAX_ICON_BYTES: usize = 4 * 1024 * 1024;
+
 fn best_pixmap_from_tuples(pixmaps: &[(i32, i32, Vec<u8>)]) -> Option<Arc<RenderImage>> {
     pixmaps
         .iter()
-        .max_by_key(|(w, h, _)| w * h)
-        .and_then(|(w, h, pixels)| render_argb_pixmap(*w as u32, *h as u32, pixels))
+        .max_by_key(|(w, h, _)| {
+            // Clamp negatives to 0 and widen to u64 to avoid i32 overflow
+            // when an adversarial peer sends huge dimensions.
+            let w = u64::from((*w).max(0) as u32);
+            let h = u64::from((*h).max(0) as u32);
+            w * h
+        })
+        .and_then(|(w, h, pixels)| render_argb_pixmap(*w, *h, pixels))
 }
 
-fn render_argb_pixmap(w: u32, h: u32, pixels: &[u8]) -> Option<Arc<RenderImage>> {
-    if pixels.len() != (w * h * 4) as usize {
+fn render_argb_pixmap(w: i32, h: i32, pixels: &[u8]) -> Option<Arc<RenderImage>> {
+    if w <= 0 || h <= 0 {
+        tracing::warn!("tray icon pixmap has non-positive dimensions: {w}x{h}");
+        return None;
+    }
+    if w > MAX_ICON_DIM || h > MAX_ICON_DIM {
+        tracing::warn!("tray icon pixmap dimensions exceed cap ({MAX_ICON_DIM}): {w}x{h}");
+        return None;
+    }
+    let w = w as u32;
+    let h = h as u32;
+    // Compute expected byte length with overflow checks — a malicious peer
+    // could otherwise wrap u32 and bypass the length check below.
+    let expected = match w.checked_mul(h).and_then(|n| n.checked_mul(4)) {
+        Some(n) => n as usize,
+        None => {
+            tracing::warn!("tray icon pixmap size overflow: {w}x{h}");
+            return None;
+        }
+    };
+    if pixels.len() != expected {
         tracing::warn!(
-            "tray icon pixmap size mismatch: {w}x{h} but {} bytes",
+            "tray icon pixmap size mismatch: {w}x{h} but {} bytes (expected {expected})",
             pixels.len()
         );
         return None;
@@ -1348,5 +1411,47 @@ mod tests {
         let src = [0x12, 0x34, 0x56, 0x78, 0xAA, 0xBB];
         let dst = argb_be_to_bgra(&src);
         assert_eq!(dst, vec![0x78, 0x56, 0x34, 0x12]);
+    }
+
+    use super::{best_pixmap_from_tuples, render_argb_pixmap, MAX_ICON_DIM};
+
+    #[test]
+    fn render_argb_pixmap_rejects_negative_dimensions() {
+        assert!(render_argb_pixmap(-1, 10, &[0u8; 40]).is_none());
+        assert!(render_argb_pixmap(10, 0, &[0u8; 40]).is_none());
+    }
+
+    #[test]
+    fn render_argb_pixmap_rejects_oversize_dimensions() {
+        // Exceeds MAX_ICON_DIM (512) — must be rejected.
+        let side = MAX_ICON_DIM + 1;
+        let bytes = vec![0u8; (side as usize) * (side as usize) * 4];
+        assert!(render_argb_pixmap(side, side, &bytes).is_none());
+    }
+
+    #[test]
+    fn render_argb_pixmap_rejects_overflow_dimensions() {
+        // Even if the caller somehow slipped past the cap, multiplications
+        // must not overflow silently. Use a dimension that would wrap u32
+        // when squared*4. (Guarded already by MAX_ICON_DIM, so we just
+        // confirm rejection rather than panic.)
+        let huge = 0x10000i32; // 65536
+        assert!(render_argb_pixmap(huge, huge, &[]).is_none());
+    }
+
+    #[test]
+    fn render_argb_pixmap_rejects_wrong_buffer_length() {
+        // 2x2 pixels * 4 bytes = 16, but only 8 supplied.
+        assert!(render_argb_pixmap(2, 2, &[0u8; 8]).is_none());
+    }
+
+    #[test]
+    fn best_pixmap_from_tuples_survives_i32_overflow_key() {
+        // w*h as i32 would overflow for 0x8000 * 0x8000; the sorter must
+        // not panic. Buffer lengths are deliberately wrong so the chosen
+        // pixmap is rejected by render_argb_pixmap — we only care the
+        // key computation doesn't overflow.
+        let pixmaps = vec![(0x8000i32, 0x8000i32, vec![]), (-1i32, -1i32, vec![])];
+        assert!(best_pixmap_from_tuples(&pixmaps).is_none());
     }
 }
