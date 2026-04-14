@@ -59,6 +59,40 @@ fn parse_menu_layout(raw: (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>)) -
         .collect()
 }
 
+/// Parse a DBusMenu / GTK-style label, stripping mnemonic markers.
+///
+/// Per the DBusMenu spec (which mirrors GTK):
+/// - A single underscore marks the character after it as a mnemonic — the
+///   underscore is removed, the following character is kept.
+/// - A doubled underscore (`__`) is an escape for a literal underscore — it
+///   collapses to a single `_` in the output.
+/// - A trailing single underscore (no character follows) is dropped, matching
+///   GTK's behavior of silently discarding an incomplete mnemonic prefix.
+fn strip_mnemonics(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '_' {
+            match chars.peek() {
+                Some('_') => {
+                    // Escaped literal underscore — consume the second '_'.
+                    out.push('_');
+                    chars.next();
+                }
+                Some(_) => {
+                    // Single underscore = mnemonic prefix; drop it, keep next char as-is.
+                }
+                None => {
+                    // Trailing single underscore — drop it.
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn parse_menu_item(value: &OwnedValue) -> anyhow::Result<MenuItem> {
     let structure = value
         .downcast_ref::<&Structure>()
@@ -78,7 +112,7 @@ fn parse_menu_item(value: &OwnedValue) -> anyhow::Result<MenuItem> {
 
     if let Some(Value::Dict(dict)) = fields.get(1) {
         if let Ok(Some(s)) = dict.get::<&str, &str>(&"label") {
-            label = s.replace('_', "");
+            label = strip_mnemonics(s);
         }
         if let Ok(Some(s)) = dict.get::<&str, &str>(&"type") {
             if s == "separator" {
@@ -454,5 +488,70 @@ pub(crate) fn open_menu_popup(
             tracing::warn!("tray: failed to open menu popup: {e}");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_mnemonics;
+
+    #[test]
+    fn no_underscore_is_passthrough() {
+        assert_eq!(strip_mnemonics("File"), "File");
+    }
+
+    #[test]
+    fn empty_string_is_empty() {
+        assert_eq!(strip_mnemonics(""), "");
+    }
+
+    #[test]
+    fn leading_mnemonic_prefix_is_stripped() {
+        assert_eq!(strip_mnemonics("_File"), "File");
+    }
+
+    #[test]
+    fn internal_mnemonic_prefix_is_stripped() {
+        assert_eq!(strip_mnemonics("Sa_ve"), "Save");
+    }
+
+    #[test]
+    fn escaped_underscore_collapses_to_single() {
+        assert_eq!(strip_mnemonics("Save__As"), "Save_As");
+    }
+
+    #[test]
+    fn mixed_mnemonic_and_escape() {
+        assert_eq!(strip_mnemonics("_Quit__Now"), "Quit_Now");
+    }
+
+    #[test]
+    fn trailing_single_underscore_is_dropped() {
+        assert_eq!(strip_mnemonics("File_"), "File");
+    }
+
+    #[test]
+    fn original_bug_cancel_all_preserves_underscore() {
+        // Regression: naive `replace('_', "")` turned "Cancel_All" into "CancelAll".
+        // With proper mnemonic parsing it becomes "CancelAll" only if '_' precedes 'A'
+        // as a mnemonic — which is the correct GTK behavior. The *escaped* variant
+        // "Cancel__All" must preserve the literal underscore.
+        assert_eq!(strip_mnemonics("Cancel_All"), "CancelAll");
+        assert_eq!(strip_mnemonics("Cancel__All"), "Cancel_All");
+    }
+
+    #[test]
+    fn multiple_escaped_underscores() {
+        assert_eq!(strip_mnemonics("a__b__c"), "a_b_c");
+    }
+
+    #[test]
+    fn only_underscore_is_dropped() {
+        assert_eq!(strip_mnemonics("_"), "");
+    }
+
+    #[test]
+    fn double_underscore_only() {
+        assert_eq!(strip_mnemonics("__"), "_");
     }
 }
