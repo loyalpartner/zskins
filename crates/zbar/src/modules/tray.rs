@@ -26,8 +26,9 @@ pub struct TrayModule {
     /// For sending CloseMenu from popup back to ourselves.
     self_tx: async_channel::Sender<TrayMsg>,
     display_id: Option<gpui::DisplayId>,
-    menu_popup: Option<gpui::WindowHandle<tray_menu::TrayMenuPopup>>,
-    menu_open_addr: Option<String>,
+    /// Currently-open context menu: the item address and its popup handle
+    /// are kept together to prevent them drifting out of sync.
+    open_menu: Option<(String, gpui::WindowHandle<tray_menu::TrayMenuPopup>)>,
 }
 
 struct TrayItem {
@@ -56,6 +57,20 @@ impl Tooltip {
 pub(crate) enum TrayIcon {
     Pixmap(Arc<RenderImage>),
     File(Arc<gpui::Image>),
+}
+
+impl TrayIcon {
+    /// Cheap identity check for change detection. Tray apps often re-push
+    /// the same icon on every status tick; if the underlying `Arc` hasn't
+    /// changed we can skip the GPUI re-render entirely.
+    fn ptr_eq(a: &Option<Self>, b: &Option<Self>) -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some(Self::Pixmap(l)), Some(Self::Pixmap(r))) => Arc::ptr_eq(l, r),
+            (Some(Self::File(l)), Some(Self::File(r))) => Arc::ptr_eq(l, r),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -106,6 +121,17 @@ enum ActivateReq {
     /// Scroll: forward wheel delta to app (e.g. pavucontrol volume,
     /// Telegram chat switching). Orientation is "vertical" or "horizontal".
     Scroll(String, i32, &'static str),
+}
+
+impl ActivateReq {
+    fn addr(&self) -> &str {
+        match self {
+            ActivateReq::Default(a)
+            | ActivateReq::Secondary(a)
+            | ActivateReq::Menu(a, _)
+            | ActivateReq::Scroll(a, _, _) => a.as_str(),
+        }
+    }
 }
 
 use super::tray_menu;
@@ -167,10 +193,9 @@ trait StatusNotifierItem {
 
 impl TrayModule {
     fn close_menu(&mut self, cx: &mut gpui::App) {
-        if let Some(handle) = self.menu_popup.take() {
+        if let Some((_, handle)) = self.open_menu.take() {
             let _ = handle.update(cx, |_, window, _| window.remove_window());
         }
-        self.menu_open_addr = None;
     }
 
     pub fn new(display_id: Option<gpui::DisplayId>, cx: &mut Context<Self>) -> Self {
@@ -201,8 +226,10 @@ impl TrayModule {
                         }
                         TrayMsg::UpdateIcon(addr, icon) => {
                             if let Some(item) = m.items.get_mut(&addr) {
-                                item.icon = icon;
-                                cx.notify();
+                                if !TrayIcon::ptr_eq(&item.icon, &icon) {
+                                    item.icon = icon;
+                                    cx.notify();
+                                }
                             }
                         }
                         TrayMsg::UpdateStatus(addr, status) => {
@@ -236,12 +263,12 @@ impl TrayModule {
                             click_x,
                         } => {
                             // Toggle: if same addr menu is already open, just close.
-                            if m.menu_open_addr.as_deref() == Some(&addr) {
+                            if m.open_menu.as_ref().map(|(a, _)| a.as_str()) == Some(&addr) {
                                 m.close_menu(cx);
                                 return;
                             }
                             m.close_menu(cx);
-                            m.menu_popup = tray_menu::open_menu_popup(
+                            if let Some(handle) = tray_menu::open_menu_popup(
                                 cx,
                                 items,
                                 addr.clone(),
@@ -250,8 +277,9 @@ impl TrayModule {
                                 m.self_tx.clone(),
                                 m.display_id,
                                 click_x,
-                            );
-                            m.menu_open_addr = Some(addr);
+                            ) {
+                                m.open_menu = Some((addr, handle));
+                            }
                         }
                     })
                     .is_err()
@@ -274,9 +302,8 @@ impl TrayModule {
             activate_tx,
             menu_click_tx,
             self_tx,
-            menu_open_addr: None,
             display_id,
-            menu_popup: None,
+            open_menu: None,
         }
     }
 }
@@ -663,13 +690,7 @@ async fn run_sni_session(
                     if let Ok(req) = activate_rx.recv().await {
                         // Extract what we need before the await to avoid
                         // holding the RefCell borrow across it.
-                        let addr = match &req {
-                            ActivateReq::Default(a)
-                            | ActivateReq::Secondary(a)
-                            | ActivateReq::Menu(a, _)
-                            | ActivateReq::Scroll(a, _, _) => a.as_str(),
-                        };
-                        let meta = item_metas.borrow().get(addr).cloned();
+                        let meta = item_metas.borrow().get(req.addr()).cloned();
                         handle_activate(&conn, tx, meta.as_ref(), req).await;
                     }
                 },
@@ -689,12 +710,7 @@ async fn handle_activate(
     meta: Option<&TrayItemMeta>,
     req: ActivateReq,
 ) {
-    let addr = match &req {
-        ActivateReq::Default(a)
-        | ActivateReq::Secondary(a)
-        | ActivateReq::Menu(a, _)
-        | ActivateReq::Scroll(a, _, _) => a.as_str(),
-    };
+    let addr = req.addr();
 
     match req {
         ActivateReq::Menu(_, click_x) => {
