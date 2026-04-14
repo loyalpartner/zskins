@@ -73,6 +73,9 @@ enum ActivateReq {
     Secondary(String),
     /// Right-click: fetch and show context menu. Carries click X for positioning.
     Menu(String, f32),
+    /// Scroll: forward wheel delta to app (e.g. pavucontrol volume,
+    /// Telegram chat switching). Orientation is "vertical" or "horizontal".
+    Scroll(String, i32, &'static str),
 }
 
 use super::tray_menu;
@@ -581,7 +584,8 @@ async fn run_sni_session(
                         let addr = match &req {
                             ActivateReq::Default(a)
                             | ActivateReq::Secondary(a)
-                            | ActivateReq::Menu(a, _) => a.as_str(),
+                            | ActivateReq::Menu(a, _)
+                            | ActivateReq::Scroll(a, _, _) => a.as_str(),
                         };
                         let meta = item_metas.borrow().get(addr).cloned();
                         handle_activate(&conn, tx, meta.as_ref(), req).await;
@@ -604,7 +608,10 @@ async fn handle_activate(
     req: ActivateReq,
 ) {
     let addr = match &req {
-        ActivateReq::Default(a) | ActivateReq::Secondary(a) | ActivateReq::Menu(a, _) => a.as_str(),
+        ActivateReq::Default(a)
+        | ActivateReq::Secondary(a)
+        | ActivateReq::Menu(a, _)
+        | ActivateReq::Scroll(a, _, _) => a.as_str(),
     };
 
     match req {
@@ -646,6 +653,9 @@ async fn handle_activate(
             let result = match req {
                 ActivateReq::Default(_) => proxy.activate(0, 0).await,
                 ActivateReq::Secondary(_) => proxy.secondary_activate(0, 0).await,
+                ActivateReq::Scroll(_, delta, orientation) => {
+                    proxy.scroll(delta, orientation).await
+                }
                 ActivateReq::Menu(_, _) => unreachable!(),
             };
             if let Err(e) = result {
@@ -1038,9 +1048,11 @@ impl Render for TrayModule {
 
             let activate_tx = self.activate_tx.clone();
             let activate_tx_menu = self.activate_tx.clone();
+            let activate_tx_scroll = self.activate_tx.clone();
             let self_tx = self.self_tx.clone();
             let addr_click = addr.clone();
             let addr_menu = addr.clone();
+            let addr_scroll = addr.clone();
 
             let base = div()
                 .id(gpui::ElementId::Name(addr.clone().into()))
@@ -1056,6 +1068,29 @@ impl Render for TrayModule {
                 .on_mouse_down(MouseButton::Right, move |ev, _, _cx| {
                     let x: f32 = ev.position.x.into();
                     let _ = activate_tx_menu.try_send(ActivateReq::Menu(addr_menu.clone(), x));
+                })
+                .on_scroll_wheel(move |ev, _window, _cx| {
+                    // SNI Scroll spec: delta is a signed int; sign convention
+                    // is up/left = negative. Pick the dominant axis so a
+                    // diagonal gesture doesn't fire twice.
+                    let (dx, dy) = match ev.delta {
+                        gpui::ScrollDelta::Pixels(p) => (f32::from(p.x), f32::from(p.y)),
+                        gpui::ScrollDelta::Lines(p) => (p.x * 10.0, p.y * 10.0),
+                    };
+                    let (delta, orientation) = if dy.abs() >= dx.abs() {
+                        // GPUI/wheel: positive dy = scroll down → negative SNI delta.
+                        (-dy.round() as i32, "vertical")
+                    } else {
+                        (-dx.round() as i32, "horizontal")
+                    };
+                    if delta == 0 {
+                        return;
+                    }
+                    let _ = activate_tx_scroll.try_send(ActivateReq::Scroll(
+                        addr_scroll.clone(),
+                        delta,
+                        orientation,
+                    ));
                 });
 
             let child = if let Some(ref icon) = item.icon {
