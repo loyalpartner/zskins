@@ -10,6 +10,7 @@ Wayland status bar built on GPUI (Zed's UI framework). Cargo workspace.
 ## Build & Test
 - `cargo check` — fast compile check
 - `cargo clippy -- -D warnings` — lint (treat warnings as errors)
+- `cargo clippy --all-targets` fails on preexisting `bool_assert_comparison` in `tests/sway_parse.rs` — unrelated; use the non-`--all-targets` form for lib/bin lints
 - `cargo fmt --check` — format check
 - `cargo test` — run tests (integration tests in `crates/zbar/tests/`)
 - `cargo build --release` — release build (~5 min, LTO enabled)
@@ -29,6 +30,8 @@ Wayland status bar built on GPUI (Zed's UI framework). Cargo workspace.
 - Module updates: only call `cx.notify()` when state actually changed
 - Backends use blocking I/O on `background_executor().spawn()` threads — `std::thread::sleep` is acceptable there
 - Volume uses `pactl subscribe` for event-driven updates (not polling)
+- DBus property reads: use `PropertiesProxy.get` / `get_all` directly instead of zbus cached accessors — avoids stale values during signal handling (`NewIcon`/`NewStatus`/`NewToolTip`)
+- Multi-property DBus fetches: prefer one `Properties.GetAll(interface)` over N separate `Get` calls on the same object
 
 ## Gotchas
 - GPUI `.cached()` API requires explicit size styles (e.g. `size_full()`); content-sized views collapse
@@ -36,3 +39,7 @@ Wayland status bar built on GPUI (Zed's UI framework). Cargo workspace.
 - xkbcommon Compose warnings suppressed via `XKB_COMPOSE_DISABLE=1` (set before threads spawn)
 - `std::env::set_var` is unsound in multi-threaded contexts — call at top of main()
 - GPUI's idle CPU baseline is ~2% due to Wayland event loop + wgpu swapchain
+
+## Worktree & Git
+- Root disk is tight; when running agents in git worktrees share target dir: `export CARGO_TARGET_DIR="$(git rev-parse --show-toplevel)/target"` (run from the main repo, before entering the worktree)
+- Commits are auto-pushed via a hook; `git status` shows "up to date with origin" right after commit — no manual `git push` needed
