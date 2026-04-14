@@ -102,4 +102,180 @@ pub trait Source: 'static {
     fn take_pulse(&mut self) -> Option<async_channel::Receiver<()>> {
         None
     }
+
+    // --- Composition hooks used by UnionSource ---
+    //
+    // UnionSource merges multiple sources into one ordered list. To do that it
+    // needs two orthogonal signals per entry:
+    //
+    // * `weight`: a *static* per-entry bias (e.g. a clipboard pin, an app's
+    //   launch-frequency score). Independent of the current query.
+    // * `filter_scored`: the *dynamic* match quality for the current query
+    //   (prefix vs substring vs fuzzy, etc.).
+    //
+    // Keeping them separate lets the union ranker combine them however it
+    // wants (typically `weight + match_score`) without each source having to
+    // know about the union. Both have defaults so existing sources compile
+    // unchanged and behave exactly as before (no weight, no match scoring).
+
+    /// Static per-entry weight. Larger values rank earlier. Default: `0`.
+    fn weight(&self, _ix: usize) -> i32 {
+        0
+    }
+
+    /// Score-annotated version of [`Source::filter`]. Each returned entry is
+    /// `(ix, match_score)` where `match_score` distinguishes prefix / substring
+    /// / fuzzy matches, etc. Default forwards to `filter` with score `0`, so
+    /// sources opt in only when they have a meaningful ranking signal.
+    fn filter_scored(&self, query: &str) -> Vec<(usize, i32)> {
+        self.filter(query).into_iter().map(|i| (i, 0)).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal Source impl: only the required methods. UI-facing methods
+    /// (`render_item`) panic because the tests never touch them.
+    struct Stub {
+        items: Vec<&'static str>,
+    }
+
+    impl Source for Stub {
+        fn name(&self) -> &'static str {
+            "stub"
+        }
+        fn icon(&self) -> &'static str {
+            "?"
+        }
+        fn placeholder(&self) -> &'static str {
+            ""
+        }
+        fn empty_text(&self) -> &'static str {
+            ""
+        }
+        fn filter(&self, _query: &str) -> Vec<usize> {
+            (0..self.items.len()).collect()
+        }
+        fn render_item(&self, _ix: usize, _selected: bool) -> AnyElement {
+            unimplemented!("not exercised in unit tests")
+        }
+        fn activate(&self, _ix: usize) -> ActivateOutcome {
+            ActivateOutcome::Quit
+        }
+    }
+
+    #[test]
+    fn default_weight_is_zero() {
+        let s = Stub {
+            items: vec!["a", "b", "c"],
+        };
+        assert_eq!(s.weight(0), 0);
+        assert_eq!(s.weight(1), 0);
+        assert_eq!(s.weight(2), 0);
+    }
+
+    #[test]
+    fn default_filter_scored_forwards_filter_with_zero_scores() {
+        struct PickTwo;
+        impl Source for PickTwo {
+            fn name(&self) -> &'static str {
+                "pick2"
+            }
+            fn icon(&self) -> &'static str {
+                "?"
+            }
+            fn placeholder(&self) -> &'static str {
+                ""
+            }
+            fn empty_text(&self) -> &'static str {
+                ""
+            }
+            fn filter(&self, _query: &str) -> Vec<usize> {
+                vec![0, 2]
+            }
+            fn render_item(&self, _ix: usize, _selected: bool) -> AnyElement {
+                unimplemented!()
+            }
+            fn activate(&self, _ix: usize) -> ActivateOutcome {
+                ActivateOutcome::Quit
+            }
+        }
+
+        let s = PickTwo;
+        assert_eq!(s.filter_scored(""), vec![(0, 0), (2, 0)]);
+    }
+
+    #[test]
+    fn overridden_weight_is_used() {
+        struct Weighted;
+        impl Source for Weighted {
+            fn name(&self) -> &'static str {
+                "weighted"
+            }
+            fn icon(&self) -> &'static str {
+                "?"
+            }
+            fn placeholder(&self) -> &'static str {
+                ""
+            }
+            fn empty_text(&self) -> &'static str {
+                ""
+            }
+            fn filter(&self, _query: &str) -> Vec<usize> {
+                Vec::new()
+            }
+            fn render_item(&self, _ix: usize, _selected: bool) -> AnyElement {
+                unimplemented!()
+            }
+            fn activate(&self, _ix: usize) -> ActivateOutcome {
+                ActivateOutcome::Quit
+            }
+            fn weight(&self, ix: usize) -> i32 {
+                (ix as i32) * 10 - 5
+            }
+        }
+
+        let s = Weighted;
+        assert_eq!(s.weight(0), -5);
+        assert_eq!(s.weight(1), 5);
+        assert_eq!(s.weight(3), 25);
+    }
+
+    #[test]
+    fn overridden_filter_scored_returns_custom_scores() {
+        struct Scored;
+        impl Source for Scored {
+            fn name(&self) -> &'static str {
+                "scored"
+            }
+            fn icon(&self) -> &'static str {
+                "?"
+            }
+            fn placeholder(&self) -> &'static str {
+                ""
+            }
+            fn empty_text(&self) -> &'static str {
+                ""
+            }
+            fn filter(&self, _query: &str) -> Vec<usize> {
+                // Intentionally different from filter_scored to prove the
+                // launcher will call the scored path directly, not via filter.
+                vec![0]
+            }
+            fn render_item(&self, _ix: usize, _selected: bool) -> AnyElement {
+                unimplemented!()
+            }
+            fn activate(&self, _ix: usize) -> ActivateOutcome {
+                ActivateOutcome::Quit
+            }
+            fn filter_scored(&self, _query: &str) -> Vec<(usize, i32)> {
+                vec![(1, 100), (4, 50), (7, 10)]
+            }
+        }
+
+        let s = Scored;
+        assert_eq!(s.filter_scored(""), vec![(1, 100), (4, 50), (7, 10)]);
+    }
 }
