@@ -7829,6 +7829,10 @@ dependencies = [
 name = "zwindows"
 version = "0.1.0"
 dependencies = [
+ "async-channel 2.5.0",
  "thiserror 2.0.18",
  "tracing",
+ "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols-wlr",
 ]
