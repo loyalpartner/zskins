@@ -7824,3 +7824,11 @@ dependencies = [
  "syn",
  "winnow 0.7.15",
 ]
+
+[[package]]
+name = "zwindows"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "tracing",
+]

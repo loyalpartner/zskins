@@ -1,0 +1,9 @@
+[package]
+name = "zwindows"
+version.workspace = true
+edition.workspace = true
+description = "Client wrapper for wlr-foreign-toplevel-management-unstable-v1 (list and control opened windows)"
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
