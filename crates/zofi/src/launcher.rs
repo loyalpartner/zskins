@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use gpui::{
     actions, div, img, prelude::*, px, uniform_list, AnyElement, App, Context, Entity, FocusHandle,
     Focusable, FontWeight, HighlightStyle, KeyBinding, MouseButton, ObjectFit, ScrollStrategy,
@@ -6,9 +8,9 @@ use gpui::{
 
 use crate::highlight;
 use crate::input::TextInput;
-use crate::source::{ActivateOutcome, Layout, Preview, Source};
+use crate::registry::SourceRegistry;
+use crate::source::{ActivateOutcome, Layout, Preview, Source, SourceMeta};
 use crate::theme;
-use crate::SOURCES;
 
 const PREVIEW_TEXT_MAX_LINES: usize = 200;
 
@@ -21,7 +23,9 @@ actions!(
         Dismiss,
         NextSource,
         PrevSource,
-        ToggleMimePane
+        ToggleMimePane,
+        TogglePeek,
+        CopyImage,
     ]
 );
 
@@ -36,6 +40,14 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-tab", NextSource, Some("Launcher")),
         KeyBinding::new("ctrl-shift-tab", PrevSource, Some("Launcher")),
         KeyBinding::new("escape", Dismiss, None),
+        // Peek: toggle full-res overlay for peekable sources (Windows).
+        // Space is safe to steal — Launcher context has no space binding,
+        // and we intercept it before IME inserts it into the query.
+        KeyBinding::new("space", TogglePeek, Some("Launcher")),
+        // Copy image to clipboard. Registered on Launcher so it fires even
+        // when TextInput has focus; see `input_key_bindings` where plain
+        // `ctrl-c` was moved to `ctrl-shift-c` so this binding wins.
+        KeyBinding::new("ctrl-c", CopyImage, Some("Launcher")),
     ];
     bindings.extend(crate::input::input_key_bindings());
     bindings
@@ -82,8 +94,105 @@ impl Pane {
     }
 }
 
+/// One position in the flat switcher bar.
+///
+/// The bar shows each registry entry's tabs side by side: a plain `Registry`
+/// for sources without children, or `UnionAll` + one `UnionChild` per child
+/// for `UnionSource`-style entries. This way the user sees every reachable
+/// view as a peer pill (no nested levels), and Ctrl+Tab cycles all of them
+/// in a single linear order.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum BarSlot {
+    /// Outer registry entry without sub-filter state (used for plain tabs).
+    Registry(usize),
+    /// Registry entry that exposes children, filtered to a specific child.
+    /// `(registry_idx, sub_filter_idx)`.
+    UnionChild(usize, usize),
+    /// Registry entry that exposes children, with `sub_filter = None`
+    /// (the "all" / combined view).
+    UnionAll(usize),
+}
+
+impl BarSlot {
+    pub(crate) fn registry_idx(self) -> usize {
+        match self {
+            BarSlot::Registry(i) | BarSlot::UnionAll(i) | BarSlot::UnionChild(i, _) => i,
+        }
+    }
+
+    pub(crate) fn sub_filter(self) -> Option<usize> {
+        match self {
+            BarSlot::UnionChild(_, j) => Some(j),
+            _ => None,
+        }
+    }
+}
+
+/// Walk every registered source and expand it into one or more flat slots.
+/// Pure function so it can be unit-tested without GPUI. For each entry:
+/// - if `sub_sources()` is non-empty: emit `UnionAll(i)` then one
+///   `UnionChild(i, j)` per child — the union view comes first so it lines
+///   up with the outer registry order.
+/// - otherwise: emit a single `Registry(i)`.
+pub(crate) fn build_bar_slots(sources: &[&dyn Source]) -> Vec<BarSlot> {
+    let mut slots = Vec::with_capacity(sources.len());
+    for (i, src) in sources.iter().enumerate() {
+        let children = src.sub_sources();
+        if children.is_empty() {
+            slots.push(BarSlot::Registry(i));
+        } else {
+            slots.push(BarSlot::UnionAll(i));
+            for j in 0..children.len() {
+                slots.push(BarSlot::UnionChild(i, j));
+            }
+        }
+    }
+    slots
+}
+
+/// Linear next-slot index with wrap. Used by `Ctrl+Tab` (forward) when called
+/// with `current + 1`, and by `Ctrl+Shift+Tab` (backward) when called with
+/// `current + len - 1`. Returns 0 on empty input so callers don't have to
+/// special-case it (and we have one less panic vector).
+pub(crate) fn next_slot(slots: &[BarSlot], current: usize) -> usize {
+    if slots.is_empty() {
+        return 0;
+    }
+    current % slots.len()
+}
+
+/// Build prefix-char → slot-index map from sources and their children.
+/// Each source's `prefix()` maps to its outer slot (Registry or UnionAll).
+/// Each union child's `SourceMeta::prefix` maps to its UnionChild slot.
+pub(crate) fn build_prefix_map(sources: &[&dyn Source], slots: &[BarSlot]) -> HashMap<char, usize> {
+    let mut map = HashMap::new();
+    for (slot_ix, slot) in slots.iter().enumerate() {
+        match *slot {
+            BarSlot::Registry(i) => {
+                if let Some(ch) = sources[i].prefix() {
+                    map.insert(ch, slot_ix);
+                }
+            }
+            BarSlot::UnionAll(i) => {
+                if let Some(ch) = sources[i].prefix() {
+                    map.insert(ch, slot_ix);
+                }
+            }
+            BarSlot::UnionChild(i, j) => {
+                let children = sources[i].sub_sources();
+                if let Some(meta) = children.get(j) {
+                    if let Some(ch) = meta.prefix {
+                        map.insert(ch, slot_ix);
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
 pub struct Launcher {
-    sources: Vec<Option<Box<dyn Source>>>,
+    registry: SourceRegistry,
     active: usize,
     filtered: Vec<usize>,
     items: Pane,
@@ -95,30 +204,93 @@ pub struct Launcher {
     mime_cache: Vec<String>,
     /// Index of `Source::primary_mime` within `mime_cache`, or `usize::MAX`.
     primary_mime_ix: usize,
+    /// Which UnionSource child, if any, the switcher bar has narrowed to.
+    /// `None` = "all" tab (or a non-union active source — then the field is
+    /// just dead storage). Mirrors `Source::set_sub_filter` so the UI can
+    /// render the correct selection without re-reading from the source.
+    sub_filter: Option<usize>,
+    /// Cached `Source::sub_sources()` for the active source. Empty for
+    /// sources that don't expose children. Cached because `render_source_bar`
+    /// runs every frame and we don't want to walk the source each time.
+    sub_sources: Vec<SourceMeta>,
+    /// Flat bar layout: every reachable view (outer + union children) as a
+    /// single linear list. Built once at startup — the registry doesn't
+    /// change at runtime, so the slot layout is stable.
+    slots: Vec<BarSlot>,
+    /// Index into `slots` of the currently-active view. Updated together
+    /// with `active` / `sub_filter` whenever the user clicks a tab or
+    /// presses Ctrl+Tab.
+    active_slot: usize,
+    /// The slot shown at startup — backspace-on-empty returns here.
+    default_slot: usize,
+    /// Prefix character → slot index. Built once at startup from each
+    /// source's `prefix()` and each union child's `SourceMeta::prefix`.
+    prefix_map: HashMap<char, usize>,
     text_input: Entity<TextInput>,
     focus_handle: FocusHandle,
+    /// Last query seen by the observer — used to skip redundant
+    /// re-processing when `set_text` fires a second notify.
+    last_query: String,
+    /// When true, render the full-resolution peek overlay instead of the
+    /// normal list+preview body. Flipped by Space when the active source's
+    /// `can_peek()` returns true.
+    peek_active: bool,
+    /// Short-lived status message (e.g. "Copied image"). Cleared on any
+    /// input/selection change; no timer — the next render tick shows it, and
+    /// the subsequent action wipes it.
+    toast: Option<String>,
 }
 
 impl Launcher {
-    pub fn new(initial: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut sources: Vec<Option<Box<dyn Source>>> = (0..SOURCES.len()).map(|_| None).collect();
-        let mut new_source = (SOURCES[initial].factory)();
-        wire_pulse(new_source.as_mut(), cx);
-        sources[initial] = Some(new_source);
-        let active = initial;
-
-        let active_source = sources[active].as_ref().unwrap();
+    pub fn new(
+        mut registry: SourceRegistry,
+        initial: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // Wire pulses for every source up-front. Sources are built before the
+        // launcher (in main) so we can't lazy-init them here, and async
+        // sources need their pulse channel hooked into our cx the moment they
+        // exist.
+        for entry in registry.iter_mut() {
+            wire_pulse(entry.source.as_mut(), cx);
+        }
+        let active = initial.min(registry.len().saturating_sub(1));
+        let active_source = registry.get(active).source.as_ref();
+        let sub_sources = active_source.sub_sources();
         let filtered = active_source.filter("");
         let placeholder = active_source.placeholder();
         let text_input = cx.new(|cx| TextInput::new(placeholder, cx));
 
+        // Build the flat slot layout once. Borrow each entry's `&dyn Source`
+        // into a temporary slice so `build_bar_slots` stays GPUI-free and
+        // unit-testable. The first slot whose `registry_idx == active` and
+        // sub_filter is `None` (UnionAll for unions, Registry otherwise)
+        // becomes the initial active slot.
+        let source_refs: Vec<&dyn Source> = registry
+            .entries()
+            .iter()
+            .map(|e| e.source.as_ref())
+            .collect();
+        let slots = build_bar_slots(&source_refs);
+        let active_slot = slots
+            .iter()
+            .position(|s| {
+                s.registry_idx() == active
+                    && matches!(s, BarSlot::Registry(_) | BarSlot::UnionAll(_))
+            })
+            .unwrap_or(0);
+        let prefix_map = build_prefix_map(&source_refs, &slots);
+
+        // Wire backspace-on-empty callback (runs inside TextInput's update,
+        // but on_empty_backspace only touches Launcher state, not TextInput).
         let launcher_entity = cx.entity().downgrade();
         text_input.update(cx, |input, _cx| {
-            input.set_on_change(Box::new(move |query, cx| {
-                if let Some(launcher) = launcher_entity.upgrade() {
+            let entity = launcher_entity.clone();
+            input.set_on_empty_backspace(Box::new(move |cx| {
+                if let Some(launcher) = entity.upgrade() {
                     launcher.update(cx, |this, cx| {
-                        this.update_filter(query);
-                        cx.notify();
+                        this.on_empty_backspace(cx);
                     });
                 }
             }));
@@ -126,8 +298,8 @@ impl Launcher {
 
         window.focus(&text_input.focus_handle(cx), cx);
 
-        Self {
-            sources,
+        let launcher = Self {
+            registry,
             active,
             filtered,
             items: Pane::new(),
@@ -135,9 +307,29 @@ impl Launcher {
             left_pane: LeftPane::Items,
             mime_cache: Vec::new(),
             primary_mime_ix: usize::MAX,
+            sub_filter: None,
+            sub_sources,
+            slots,
+            active_slot,
+            default_slot: active_slot,
+            prefix_map,
             text_input,
             focus_handle: cx.focus_handle(),
-        }
+            last_query: String::new(),
+            peek_active: false,
+            toast: None,
+        };
+
+        // Observe TextInput from the outside — fires AFTER TextInput's
+        // update completes, so we can freely read TextInput and notify
+        // the Launcher without any reentrant-borrow issues.
+        cx.observe(&launcher.text_input, |this: &mut Launcher, input, cx| {
+            let query = input.read(cx).content().to_string();
+            this.on_input_change(&query, cx);
+        })
+        .detach();
+
+        launcher
     }
 
     fn refresh_mime_cache(&mut self) {
@@ -157,32 +349,64 @@ impl Launcher {
     }
 
     fn source(&self) -> &dyn Source {
-        self.sources[self.active].as_deref().unwrap()
+        self.registry.get(self.active).source.as_ref()
     }
 
-    fn switch_source(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if ix >= SOURCES.len() || ix == self.active {
-            return;
+    /// Core slot-switch: updates active source, sub-filter, panes, and
+    /// filtered results. Does NOT touch TextInput or call cx.notify() —
+    /// callers handle text reset and repaint to avoid observer reentrance.
+    fn switch_to_slot(&mut self, slot_ix: usize, cx: &mut Context<Self>) -> bool {
+        let Some(&slot) = self.slots.get(slot_ix) else {
+            return false;
+        };
+        let new_registry = slot.registry_idx();
+        let new_sub = slot.sub_filter();
+        if slot_ix == self.active_slot {
+            return false;
         }
-        if self.sources[ix].is_none() {
-            let mut new_source = (SOURCES[ix].factory)();
-            wire_pulse(new_source.as_mut(), cx);
-            self.sources[ix] = Some(new_source);
-        }
-        self.active = ix;
-        self.filtered = self.sources[ix].as_ref().unwrap().filter("");
+        let registry_changed = new_registry != self.active;
+        self.active_slot = slot_ix;
+        self.active = new_registry;
+        self.sub_filter = new_sub;
+
+        let entry = self.registry.get(new_registry);
+        entry.source.set_sub_filter(new_sub);
+        self.sub_sources = entry.source.sub_sources();
+
+        let query = if registry_changed {
+            String::new()
+        } else {
+            self.text_input.read(cx).content().to_string()
+        };
+        self.filtered = entry.source.filter(&query);
         self.items.reset();
         self.mimes.reset();
         self.left_pane = LeftPane::Items;
         self.mime_cache.clear();
+        true
+    }
 
-        let placeholder = self.sources[ix].as_ref().unwrap().placeholder();
+    /// Reset TextInput after a source switch and notify for repaint.
+    fn finish_slot_switch(&mut self, cx: &mut Context<Self>) {
+        let placeholder = self.source().placeholder();
+        self.last_query = String::new();
         self.text_input.update(cx, |input, cx| {
             input.set_placeholder(placeholder);
             input.set_text("", cx);
         });
-        window.focus(&self.text_input.focus_handle(cx), cx);
         cx.notify();
+    }
+
+    /// Full slot activation with focus restore. Used by bar tab clicks and
+    /// Ctrl+Tab cycling where GPUI mouse handling may steal focus.
+    fn apply_slot(&mut self, slot_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.switch_to_slot(slot_ix, cx) {
+            self.finish_slot_switch(cx);
+            let handle = self.text_input.focus_handle(cx);
+            cx.defer_in(window, move |_, window, cx| {
+                window.focus(&handle, cx);
+            });
+        }
     }
 
     fn update_filter(&mut self, query: &str) {
@@ -191,6 +415,40 @@ impl Launcher {
         self.mimes.reset();
         self.left_pane = LeftPane::Items;
         self.mime_cache.clear();
+    }
+
+    /// Called on every text change. If the query is a single prefix char,
+    /// switch source and defer clearing the input. Otherwise re-filter.
+    /// Called by the observer when TextInput content changes. Runs AFTER
+    /// TextInput's update completes, so we can safely read/write it.
+    fn on_input_change(&mut self, query: &str, cx: &mut Context<Self>) {
+        if query == self.last_query {
+            return;
+        }
+        self.last_query = query.to_string();
+
+        if let Some(ch) = query.chars().next() {
+            if query.len() == ch.len_utf8() {
+                if let Some(&slot_ix) = self.prefix_map.get(&ch) {
+                    if self.switch_to_slot(slot_ix, cx) {
+                        self.finish_slot_switch(cx);
+                    }
+                    return;
+                }
+            }
+        }
+        self.update_filter(query);
+        cx.notify();
+    }
+
+    /// Called when backspace is pressed on an empty input.
+    fn on_empty_backspace(&mut self, cx: &mut Context<Self>) {
+        if self.active_slot == self.default_slot {
+            return;
+        }
+        if self.switch_to_slot(self.default_slot, cx) {
+            self.finish_slot_switch(cx);
+        }
     }
 
     /// Re-runs the source's filter without resetting the user's cursor.
@@ -211,6 +469,7 @@ impl Launcher {
             }
             LeftPane::Mimes => self.mimes.move_up(),
         }
+        self.toast = None;
         cx.notify();
     }
 
@@ -222,10 +481,24 @@ impl Launcher {
             }
             LeftPane::Mimes => self.mimes.move_down(self.mime_cache.len()),
         }
+        self.toast = None;
         cx.notify();
     }
 
     fn confirm(&mut self, _: &Confirm, _: &mut Window, cx: &mut Context<Self>) {
+        // Capture the MRU key before activate — activate may mutate source
+        // state (file picker navigation), so reading item_key afterwards is
+        // racy. The pair is `(source_name, item_key)` and is keyed on the
+        // active source, not any nested child: UnionSource's item_key/name
+        // already route to the right child for us.
+        let record = match self.filtered.get(self.items.selected) {
+            Some(&idx) => self
+                .source()
+                .item_key(idx)
+                .map(|key| (self.source().source_name(idx), key)),
+            None => None,
+        };
+
         let outcome = match self.filtered.get(self.items.selected) {
             Some(&idx) => match self.left_pane {
                 LeftPane::Items => self.source().activate(idx),
@@ -236,6 +509,12 @@ impl Launcher {
             },
             None => ActivateOutcome::Quit,
         };
+
+        if let Some((source_name, key)) = record {
+            if let Some(tracker) = self.registry.tracker() {
+                tracker.record(source_name, &key);
+            }
+        }
         match outcome {
             ActivateOutcome::Quit => cx.quit(),
             ActivateOutcome::Refresh => {
@@ -248,11 +527,67 @@ impl Launcher {
     }
 
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        if self.peek_active {
+            self.peek_active = false;
+            cx.notify();
+            return;
+        }
         if self.left_pane == LeftPane::Mimes {
             self.left_pane = LeftPane::Items;
             cx.notify();
         } else {
             cx.quit();
+        }
+    }
+
+    fn toggle_peek(&mut self, _: &TogglePeek, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.source().can_peek() {
+            return;
+        }
+        if self.filtered.get(self.items.selected).is_none() {
+            return;
+        }
+        self.peek_active = !self.peek_active;
+        self.toast = None;
+        cx.notify();
+    }
+
+    fn copy_image(&mut self, _: &CopyImage, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.source().can_copy_image() {
+            return;
+        }
+        let Some(&item_ix) = self.filtered.get(self.items.selected) else {
+            return;
+        };
+        let Some(bytes) = self.source().copy_image_bytes(item_ix) else {
+            tracing::info!("copy_image: no image bytes for selection");
+            self.toast = Some("No image".into());
+            cx.notify();
+            return;
+        };
+        // Hand the bytes off to zofi-clipd via IPC. The daemon records the
+        // image in clipboard history and becomes the wayland selection
+        // owner, so the selection survives `cx.quit()` and the user can
+        // paste anywhere. Falls back to a toast if the daemon isn't running.
+        let req = zofi_clipd::ipc::Request::SetSelection {
+            mime: "image/png".into(),
+            bytes: bytes.as_ref().clone(),
+        };
+        match zofi_clipd::ipc::send(&req) {
+            Ok(zofi_clipd::ipc::Response::Ok) => {
+                tracing::info!("copy_image: clipd holding image/png");
+                cx.quit();
+            }
+            Ok(zofi_clipd::ipc::Response::Error { message }) => {
+                tracing::warn!("copy_image: clipd refused: {message}");
+                self.toast = Some(format!("Copy failed: {message}"));
+                cx.notify();
+            }
+            Err(e) => {
+                tracing::warn!("copy_image: clipd ipc failed: {e}");
+                self.toast = Some(format!("Copy failed: {e} (is `zofi clipd` running?)"));
+                cx.notify();
+            }
         }
     }
 
@@ -276,13 +611,20 @@ impl Launcher {
     }
 
     fn next_source(&mut self, _: &NextSource, window: &mut Window, cx: &mut Context<Self>) {
-        let next = (self.active + 1) % SOURCES.len();
-        self.switch_source(next, window, cx);
+        if self.slots.is_empty() {
+            return;
+        }
+        let next = next_slot(&self.slots, self.active_slot + 1);
+        self.apply_slot(next, window, cx);
     }
 
     fn prev_source(&mut self, _: &PrevSource, window: &mut Window, cx: &mut Context<Self>) {
-        let prev = (self.active + SOURCES.len() - 1) % SOURCES.len();
-        self.switch_source(prev, window, cx);
+        let n = self.slots.len();
+        if n == 0 {
+            return;
+        }
+        let prev = next_slot(&self.slots, self.active_slot + n - 1);
+        self.apply_slot(prev, window, cx);
     }
 
     fn render_row(&self, list_ix: usize) -> gpui::Stateful<gpui::Div> {
@@ -454,57 +796,130 @@ impl Launcher {
         }
     }
 
+    /// Full-screen peek overlay: dark backdrop + centered full-resolution
+    /// screenshot. Rendered in place of the normal panel when `peek_active`
+    /// is set; all action routes stay wired so keys work identically.
+    fn render_peek(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let item_ix = self.filtered.get(self.items.selected).copied();
+        let peek_img = item_ix.and_then(|ix| self.source().peek_image(ix));
+        let status = item_ix
+            .and_then(|ix| self.source().item_key(ix))
+            .unwrap_or_default();
+
+        let image_child: AnyElement = match peek_img {
+            Some(img) => img_el_for_peek(img),
+            None => div()
+                .text_color(theme::fg_dim())
+                .text_size(theme::FONT_SIZE)
+                .child("(no preview available)")
+                .into_any_element(),
+        };
+
+        let toast_bar = self.toast.as_ref().map(|t| {
+            div()
+                .px(px(12.0))
+                .py(px(6.0))
+                .rounded(px(6.0))
+                .bg(theme::selected_bg())
+                .text_color(theme::fg_accent())
+                .text_size(theme::FONT_SIZE_SM)
+                .child(t.clone())
+        });
+
+        div()
+            .key_context("Launcher")
+            .track_focus(&self.focus_handle(cx))
+            .on_action(cx.listener(Self::move_up))
+            .on_action(cx.listener(Self::move_down))
+            .on_action(cx.listener(Self::confirm))
+            .on_action(cx.listener(Self::dismiss))
+            .on_action(cx.listener(Self::toggle_peek))
+            .on_action(cx.listener(Self::copy_image))
+            .size_full()
+            .bg(gpui::rgba(0x0000_00cc))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(12.0))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.dispatch_action(&TogglePeek);
+            })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(16.0))
+                    .text_size(theme::FONT_SIZE_SM)
+                    .text_color(theme::fg_dim())
+                    .child(
+                        div()
+                            .text_color(theme::fg_accent())
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(status),
+                    )
+                    .child(div().child("space exit · ctrl-c copy · enter switch · ↑↓ next"))
+                    .children(toast_bar),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .overflow_hidden()
+                    // Swallow clicks on the image so only the backdrop exits peek.
+                    .on_mouse_down(MouseButton::Left, |_, _, _| {})
+                    .child(image_child),
+            )
+    }
+
     fn render_source_bar(&self, cx: &mut Context<Self>) -> gpui::Div {
         let mut bar = div().flex().items_center().gap(px(8.0)).pl(theme::PAD_X);
-        for (ix, entry) in SOURCES.iter().enumerate() {
-            let sel = ix == self.active;
-            let id = ("source-tab", ix);
-            let icon = entry.icon;
-            let bg = if sel {
-                theme::selected_bg()
-            } else {
-                gpui::transparent_black()
-            };
-            let fg = if sel {
-                theme::fg_accent()
-            } else {
-                theme::fg_dim()
-            };
-            let entity = cx.entity().downgrade();
-            let tab = div()
-                .id(id)
-                .cursor_pointer()
-                .px(px(8.0))
-                .py(px(2.0))
-                .rounded(px(4.0))
-                .bg(bg)
-                .text_size(px(15.0))
-                .text_color(fg)
-                .hover(|s| s.bg(theme::hover_bg()))
-                .child(icon)
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                    if let Some(this) = entity.upgrade() {
-                        this.update(cx, |this, cx| {
-                            this.switch_source(ix, window, cx);
-                            // Defer focus restore until after this event
-                            // cycle — calling window.focus inline runs before
-                            // GPUI's own mouse-event handling, which then
-                            // moves focus to the clicked element.
-                            let handle = this.text_input.focus_handle(cx);
-                            cx.defer_in(window, move |_, window, cx| {
-                                window.focus(&handle, cx);
-                            });
-                        });
-                    }
-                });
+        // Flat layout: every reachable view is a peer pill. UnionAll uses
+        // its outer registry icon; UnionChild uses its child's icon. This
+        // collapses the previous two-level (outer tabs + sub-filter tabs)
+        // navigation into one row — there are no nested levels to discover.
+        for (ix, slot) in self.slots.iter().enumerate() {
+            let icon = self.slot_icon(*slot);
+            let selected = ix == self.active_slot;
+            let tab = tab_pill(
+                ("bar-slot", ix),
+                icon,
+                selected,
+                cx.entity().downgrade(),
+                move |this, window, cx| this.apply_slot(ix, window, cx),
+            );
             bar = bar.child(tab);
         }
         bar
+    }
+
+    /// Resolve the glyph for a slot. Cheap (constant string per registry/
+    /// child entry) so we re-derive it per render rather than caching.
+    fn slot_icon(&self, slot: BarSlot) -> &'static str {
+        match slot {
+            BarSlot::Registry(i) | BarSlot::UnionAll(i) => self.registry.get(i).icon(),
+            BarSlot::UnionChild(i, j) => {
+                let children = self.registry.get(i).source.sub_sources();
+                // Defensive: if the child set shrank between startup and
+                // now (shouldn't happen — registry is immutable at runtime
+                // — but UnionSource::sub_sources isn't statically frozen)
+                // fall back to the parent's icon rather than panicking.
+                children
+                    .get(j)
+                    .map(|m| m.icon)
+                    .unwrap_or(self.registry.get(i).icon())
+            }
+        }
     }
 }
 
 impl Render for Launcher {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.peek_active {
+            return self.render_peek(cx).into_any_element();
+        }
         let count = self.filtered.len();
         let pos = if count > 0 {
             format!("{}/{}", self.items.selected + 1, count)
@@ -610,6 +1025,8 @@ impl Render for Launcher {
             .on_action(cx.listener(Self::next_source))
             .on_action(cx.listener(Self::prev_source))
             .on_action(cx.listener(Self::toggle_mime_pane))
+            .on_action(cx.listener(Self::toggle_peek))
+            .on_action(cx.listener(Self::copy_image))
             .size_full()
             .flex()
             .items_center()
@@ -671,11 +1088,18 @@ impl Render for Launcher {
                                         "tab",
                                     ))
                                     .child(key_hint("Source", "ctrl-tab"))
+                                    .when(self.source().can_peek(), |d| {
+                                        d.child(key_hint("Peek", "space"))
+                                    })
+                                    .when(self.source().can_copy_image(), |d| {
+                                        d.child(key_hint("Copy", "ctrl-c"))
+                                    })
                                     .child(key_hint("Close", "esc"))
                                     .child(key_hint("Activate", "enter")),
                             ),
                     ),
             )
+            .into_any_element()
     }
 }
 
@@ -683,6 +1107,55 @@ impl Focusable for Launcher {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
+}
+
+/// Factored-out switcher-bar tab: pill styling + click handler. Both the
+/// multi-source and sub-filter bars use this so selection, hover, and
+/// focus-restore stay in sync across the two paths.
+fn tab_pill(
+    id: impl Into<gpui::ElementId>,
+    icon: &'static str,
+    selected: bool,
+    entity: gpui::WeakEntity<Launcher>,
+    on_click: impl Fn(&mut Launcher, &mut Window, &mut Context<Launcher>) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let bg = if selected {
+        theme::selected_bg()
+    } else {
+        gpui::transparent_black()
+    };
+    let fg = if selected {
+        theme::fg_accent()
+    } else {
+        theme::fg_dim()
+    };
+    div()
+        .id(id)
+        .cursor_pointer()
+        .px(px(8.0))
+        .py(px(2.0))
+        .rounded(px(4.0))
+        .bg(bg)
+        .text_size(px(15.0))
+        .text_color(fg)
+        .hover(|s| s.bg(theme::hover_bg()))
+        .child(icon)
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            if let Some(this) = entity.upgrade() {
+                this.update(cx, |this, cx| on_click(this, window, cx));
+            }
+        })
+}
+
+/// Centered full-res peek image, scaled down with `Contain` so a 4K capture
+/// still fits the overlay without cropping.
+fn img_el_for_peek(image: std::sync::Arc<gpui::Image>) -> AnyElement {
+    img(image)
+        .max_w_full()
+        .max_h_full()
+        .object_fit(ObjectFit::Contain)
+        .rounded(px(6.0))
+        .into_any_element()
 }
 
 fn key_hint(label: &str, key: &str) -> gpui::Div {
@@ -722,4 +1195,223 @@ fn wire_pulse(source: &mut dyn Source, cx: &mut Context<Launcher>) {
         }
     })
     .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source::{ActivateOutcome, SourceMeta};
+    use gpui::AnyElement;
+
+    /// Stub source: optionally exposes a fixed list of children. Built
+    /// purely to exercise `build_bar_slots` without GPUI.
+    struct Stub {
+        name: &'static str,
+        children: Vec<SourceMeta>,
+        prefix_ch: Option<char>,
+    }
+
+    impl Stub {
+        fn plain(name: &'static str) -> Self {
+            Self {
+                name,
+                children: Vec::new(),
+                prefix_ch: None,
+            }
+        }
+        fn with_children(name: &'static str, children: Vec<SourceMeta>) -> Self {
+            Self {
+                name,
+                children,
+                prefix_ch: None,
+            }
+        }
+        fn with_prefix(mut self, ch: char) -> Self {
+            self.prefix_ch = Some(ch);
+            self
+        }
+    }
+
+    impl Source for Stub {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn icon(&self) -> &'static str {
+            "x"
+        }
+        fn prefix(&self) -> Option<char> {
+            self.prefix_ch
+        }
+        fn placeholder(&self) -> &'static str {
+            ""
+        }
+        fn empty_text(&self) -> &'static str {
+            ""
+        }
+        fn filter(&self, _: &str) -> Vec<usize> {
+            Vec::new()
+        }
+        fn render_item(&self, _: usize, _: bool) -> AnyElement {
+            unimplemented!("not used in slot tests")
+        }
+        fn activate(&self, _: usize) -> ActivateOutcome {
+            ActivateOutcome::Quit
+        }
+        fn sub_sources(&self) -> Vec<SourceMeta> {
+            self.children.clone()
+        }
+    }
+
+    fn meta(name: &'static str) -> SourceMeta {
+        SourceMeta {
+            name,
+            icon: "?",
+            prefix: None,
+        }
+    }
+
+    fn meta_with_prefix(name: &'static str, ch: char) -> SourceMeta {
+        SourceMeta {
+            name,
+            icon: "?",
+            prefix: Some(ch),
+        }
+    }
+
+    fn refs(v: &[Box<dyn Source>]) -> Vec<&dyn Source> {
+        v.iter().map(|b| b.as_ref()).collect()
+    }
+
+    #[test]
+    fn build_bar_slots_flat_registry_yields_one_slot_per_entry() {
+        let sources: Vec<Box<dyn Source>> = vec![
+            Box::new(Stub::plain("apps")),
+            Box::new(Stub::plain("files")),
+            Box::new(Stub::plain("clipboard")),
+        ];
+        let slots = build_bar_slots(&refs(&sources));
+        assert_eq!(
+            slots,
+            vec![
+                BarSlot::Registry(0),
+                BarSlot::Registry(1),
+                BarSlot::Registry(2),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_bar_slots_expands_union_into_all_plus_children() {
+        // Mirrors the production composition: union(2 children), files,
+        // clipboard → expect 5 flat slots in a fixed order.
+        let sources: Vec<Box<dyn Source>> = vec![
+            Box::new(Stub::with_children(
+                "launch",
+                vec![meta("windows"), meta("apps")],
+            )),
+            Box::new(Stub::plain("files")),
+            Box::new(Stub::plain("clipboard")),
+        ];
+        let slots = build_bar_slots(&refs(&sources));
+        assert_eq!(
+            slots,
+            vec![
+                BarSlot::UnionAll(0),
+                BarSlot::UnionChild(0, 0),
+                BarSlot::UnionChild(0, 1),
+                BarSlot::Registry(1),
+                BarSlot::Registry(2),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_bar_slots_empty_registry_yields_no_slots() {
+        let sources: Vec<Box<dyn Source>> = vec![];
+        let slots = build_bar_slots(&refs(&sources));
+        assert!(slots.is_empty());
+    }
+
+    #[test]
+    fn next_slot_wraps_at_end() {
+        let slots = vec![
+            BarSlot::Registry(0),
+            BarSlot::Registry(1),
+            BarSlot::Registry(2),
+        ];
+        // Ctrl+Tab from last slot: caller passes current+1 = 3 → wraps to 0.
+        assert_eq!(next_slot(&slots, 3), 0);
+        // Mid-cycle: current+1 = 2 → 2 (no wrap).
+        assert_eq!(next_slot(&slots, 2), 2);
+        // Backwards from slot 0: caller passes current+len-1 = 2 → 2.
+        assert_eq!(next_slot(&slots, 2), 2);
+    }
+
+    #[test]
+    fn next_slot_handles_empty_input_without_panic() {
+        let slots: Vec<BarSlot> = Vec::new();
+        // Modulo would divide by zero — function must short-circuit.
+        assert_eq!(next_slot(&slots, 0), 0);
+        assert_eq!(next_slot(&slots, 99), 0);
+    }
+
+    #[test]
+    fn bar_slot_registry_idx_and_sub_filter_round_trip() {
+        // Both fields in one place so the (registry, Option<sub>) tuple
+        // the launcher reads stays glued to the slot variant definition.
+        assert_eq!(BarSlot::Registry(2).registry_idx(), 2);
+        assert_eq!(BarSlot::Registry(2).sub_filter(), None);
+        assert_eq!(BarSlot::UnionAll(0).registry_idx(), 0);
+        assert_eq!(BarSlot::UnionAll(0).sub_filter(), None);
+        assert_eq!(BarSlot::UnionChild(0, 1).registry_idx(), 0);
+        assert_eq!(BarSlot::UnionChild(0, 1).sub_filter(), Some(1));
+    }
+
+    // -- prefix_map tests --
+
+    #[test]
+    fn prefix_map_maps_plain_source_prefix_to_registry_slot() {
+        let sources: Vec<Box<dyn Source>> = vec![
+            Box::new(Stub::plain("apps")),
+            Box::new(Stub::plain("files").with_prefix('/')),
+        ];
+        let r = refs(&sources);
+        let slots = build_bar_slots(&r);
+        let map = build_prefix_map(&r, &slots);
+        assert_eq!(map.get(&'/'), Some(&1)); // Registry(1)
+        assert!(map.get(&'>').is_none());
+    }
+
+    #[test]
+    fn prefix_map_maps_union_child_prefix_to_child_slot() {
+        let sources: Vec<Box<dyn Source>> = vec![
+            Box::new(Stub::with_children(
+                "launch",
+                vec![
+                    meta_with_prefix("windows", '@'),
+                    meta_with_prefix("apps", '>'),
+                ],
+            )),
+            Box::new(Stub::plain("files").with_prefix('/')),
+        ];
+        let r = refs(&sources);
+        let slots = build_bar_slots(&r);
+        // slots: UnionAll(0), UnionChild(0,0), UnionChild(0,1), Registry(1)
+        let map = build_prefix_map(&r, &slots);
+        assert_eq!(map.get(&'@'), Some(&1)); // UnionChild(0,0)
+        assert_eq!(map.get(&'>'), Some(&2)); // UnionChild(0,1)
+        assert_eq!(map.get(&'/'), Some(&3)); // Registry(1)
+    }
+
+    #[test]
+    fn prefix_map_empty_when_no_prefixes() {
+        let sources: Vec<Box<dyn Source>> = vec![
+            Box::new(Stub::plain("apps")),
+            Box::new(Stub::plain("files")),
+        ];
+        let r = refs(&sources);
+        let slots = build_bar_slots(&r);
+        let map = build_prefix_map(&r, &slots);
+        assert!(map.is_empty());
+    }
 }
