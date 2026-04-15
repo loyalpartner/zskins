@@ -16,6 +16,7 @@ tracing-subscriber.workspace = true
 unicode-segmentation.workspace = true
 rayon.workspace = true
 icon-theme.workspace = true
+zwindows.workspace = true
 walkdir.workspace = true
 async-channel.workspace = true
 include_dir.workspace = true
