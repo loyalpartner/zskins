@@ -24,6 +24,18 @@ pub enum ActivateOutcome {
     Refresh,
 }
 
+/// Metadata for a source entry in UI (name + icon glyph).
+///
+/// Declared here so [`Source::sub_sources`] can return it without exposing
+/// concrete source types to the launcher — the launcher only needs the
+/// glyph and the label when rendering the switcher bar's child-filter tabs.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct SourceMeta {
+    pub name: &'static str,
+    pub icon: &'static str,
+    pub prefix: Option<char>,
+}
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Layout {
     /// Single panel: list only.
@@ -39,6 +51,14 @@ pub trait Source: 'static {
     fn icon(&self) -> &'static str;
     fn placeholder(&self) -> &'static str;
     fn empty_text(&self) -> &'static str;
+
+    /// Prefix character that activates this source from the input box.
+    /// Typing this character (when it's the first keystroke) switches to
+    /// this source without the character appearing in the query. `None`
+    /// means no prefix shortcut is registered.
+    fn prefix(&self) -> Option<char> {
+        None
+    }
 
     fn filter(&self, query: &str) -> Vec<usize>;
 
@@ -129,6 +149,75 @@ pub trait Source: 'static {
     /// sources opt in only when they have a meaningful ranking signal.
     fn filter_scored(&self, query: &str) -> Vec<(usize, i32)> {
         self.filter(query).into_iter().map(|i| (i, 0)).collect()
+    }
+
+    // --- UnionSource child-filter hooks ---
+    //
+    // Collapsing apps + windows + files + clipboard into a single UnionSource
+    // gives one search box but loses the "only show windows" affordance the
+    // multi-source switcher bar used to provide. These two defaults are a
+    // non-breaking way to expose that back to the launcher without leaking
+    // UnionSource's internals or requiring every source to know about it:
+    // non-union sources simply return empty / no-op.
+
+    /// Expose this source's child sources for UI filtering. Returns one entry
+    /// per child (preserving registration order). Non-union sources return
+    /// an empty vector — the launcher treats that as "no child tabs to show".
+    fn sub_sources(&self) -> Vec<SourceMeta> {
+        Vec::new()
+    }
+
+    /// Restrict subsequent `filter` / `filter_scored` calls to a single child
+    /// (by index into [`Source::sub_sources`]), or `None` to cover all
+    /// children. Only [`crate::sources::union::UnionSource`] honors this;
+    /// other sources ignore it. The launcher must re-run `filter` after
+    /// toggling this for the change to reach the UI — `set_sub_filter`
+    /// deliberately doesn't mutate the current result set so the same call
+    /// site works whether the query has changed or not.
+    fn set_sub_filter(&self, _idx: Option<usize>) {}
+
+    /// Stable per-entry key for MRU/frecency tracking. `Some(_)` means this
+    /// source opts in — after activation the launcher records
+    /// `(source_name(ix), item_key(ix))` into [`crate::usage::UsageTracker`],
+    /// and [`Source::weight`] should fold the tracker's bonus into its score.
+    /// Sources that don't have a meaningful stable key (e.g. file picker,
+    /// clipboard history rows) return `None` and are excluded from frecency.
+    fn item_key(&self, _ix: usize) -> Option<String> {
+        None
+    }
+
+    /// MRU-writing source name for entry `ix`. Defaults to [`Source::name`]
+    /// so single-source implementations need no override. `UnionSource`
+    /// routes this to the child owning the row so `(apps, firefox)` and
+    /// `(windows, firefox)` end up in separate rows of the usage table even
+    /// though both were activated via the same union's "launch" tab.
+    fn source_name(&self, _ix: usize) -> &'static str {
+        self.name()
+    }
+
+    /// Full-resolution image for peek mode. The launcher paints this 1:1 over
+    /// the overlay surface when the user presses Space, giving a crisp
+    /// native-sized preview (the regular `preview` pane is downscaled).
+    /// Default `None`; override on image-bearing sources.
+    fn peek_image(&self, _ix: usize) -> Option<Arc<Image>> {
+        None
+    }
+
+    /// Whether this source can enter peek mode. Space is a no-op unless this
+    /// returns `true`.
+    fn can_peek(&self) -> bool {
+        false
+    }
+
+    /// PNG-encoded image bytes for clipboard copy. Ctrl+C on the selected row
+    /// writes them as `image/png`. Default `None` means "row has no image".
+    fn copy_image_bytes(&self, _ix: usize) -> Option<Arc<Vec<u8>>> {
+        None
+    }
+
+    /// Whether this source has copyable images. Ctrl+C is a no-op otherwise.
+    fn can_copy_image(&self) -> bool {
+        false
     }
 }
 
@@ -277,5 +366,17 @@ mod tests {
 
         let s = Scored;
         assert_eq!(s.filter_scored(""), vec![(1, 100), (4, 50), (7, 10)]);
+    }
+
+    #[test]
+    fn non_union_source_returns_empty_sub_sources() {
+        // Default impl must stay empty so launcher's "does this source have
+        // children?" check stays correct without modifying every source.
+        let s = Stub { items: vec![] };
+        assert!(s.sub_sources().is_empty());
+        // set_sub_filter default is a no-op; asserting it doesn't panic is
+        // enough — there's no observable state.
+        s.set_sub_filter(Some(0));
+        s.set_sub_filter(None);
     }
 }

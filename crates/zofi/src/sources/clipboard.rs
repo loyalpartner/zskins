@@ -97,6 +97,10 @@ impl Source for ClipboardSource {
         "▤"
     }
 
+    fn prefix(&self) -> Option<char> {
+        Some('\'')
+    }
+
     fn placeholder(&self) -> &'static str {
         "Search clipboard..."
     }
