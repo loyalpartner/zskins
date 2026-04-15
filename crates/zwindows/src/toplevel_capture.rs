@@ -79,7 +79,9 @@ pub enum CaptureError {
 /// `screencopy + sway_tree` pipeline — it works on any compositor that
 /// implements the ext capture protocols and can capture minimized / off-screen
 /// windows.
-pub fn capture_toplevels(timeout: Duration) -> Result<HashMap<(String, String), RgbaBuffer>, CaptureError> {
+pub fn capture_toplevels(
+    timeout: Duration,
+) -> Result<HashMap<(String, String), RgbaBuffer>, CaptureError> {
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue): (_, EventQueue<State>) = registry_queue_init(&conn)?;
     let qh = queue.handle();
@@ -122,10 +124,7 @@ pub fn capture_toplevels(timeout: Duration) -> Result<HashMap<(String, String), 
         .cloned()
         .collect();
 
-    tracing::info!(
-        "toplevel_capture: discovered {} toplevels",
-        toplevels.len()
-    );
+    tracing::info!("toplevel_capture: discovered {} toplevels", toplevels.len());
     if toplevels.is_empty() {
         return Ok(HashMap::new());
     }
@@ -160,9 +159,7 @@ pub fn capture_toplevels(timeout: Duration) -> Result<HashMap<(String, String), 
                 results.insert((app_id, title), buf);
             }
             Err(e) => {
-                tracing::info!(
-                    "toplevel_capture: skip ({app_id:?}, {title:?}): {e}"
-                );
+                tracing::info!("toplevel_capture: skip ({app_id:?}, {title:?}): {e}");
             }
         }
     }
@@ -205,8 +202,7 @@ fn capture_one_toplevel(
     timeout: Duration,
 ) -> Result<RgbaBuffer, CaptureError> {
     // Step 1: create an image capture source from the toplevel handle.
-    let source: ExtImageCaptureSourceV1 =
-        capture_source_mgr.create_source(handle, qh, ());
+    let source: ExtImageCaptureSourceV1 = capture_source_mgr.create_source(handle, qh, ());
 
     // Step 2: create a capture session (no cursor overlay).
     let session_state = Arc::new(Mutex::new(SessionState::default()));
@@ -255,8 +251,7 @@ fn capture_one_toplevel(
 
     // Step 5: create a frame, attach buffer, damage full region, capture.
     let frame_state = Arc::new(Mutex::new(FrameState::default()));
-    let frame: ExtImageCopyCaptureFrameV1 =
-        session.create_frame(qh, frame_state.clone());
+    let frame: ExtImageCopyCaptureFrameV1 = session.create_frame(qh, frame_state.clone());
     frame.attach_buffer(&buffer);
     frame.damage_buffer(0, 0, width as i32, height as i32);
     frame.capture();
@@ -393,21 +388,39 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
 // --- wl_shm ---
 
 impl Dispatch<WlShm, ()> for State {
-    fn event(_: &mut Self, _: &WlShm, _: wl_shm::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &WlShm,
+        _: wl_shm::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<WlShmPool, ()> for State {
     fn event(
-        _: &mut Self, _: &WlShmPool, _: wayland_client::protocol::wl_shm_pool::Event,
-        _: &(), _: &Connection, _: &QueueHandle<Self>,
-    ) {}
+        _: &mut Self,
+        _: &WlShmPool,
+        _: wayland_client::protocol::wl_shm_pool::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<WlBuffer, ()> for State {
     fn event(
-        _: &mut Self, _: &WlBuffer, _: wayland_client::protocol::wl_buffer::Event,
-        _: &(), _: &Connection, _: &QueueHandle<Self>,
-    ) {}
+        _: &mut Self,
+        _: &WlBuffer,
+        _: wayland_client::protocol::wl_buffer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 // --- ext_foreign_toplevel_list_v1 ---
@@ -482,30 +495,42 @@ impl Dispatch<ExtForeignToplevelHandleV1, ()> for State {
 
 impl Dispatch<ExtImageCaptureSourceV1, ()> for State {
     fn event(
-        _: &mut Self, _: &ExtImageCaptureSourceV1,
+        _: &mut Self,
+        _: &ExtImageCaptureSourceV1,
         _: wayland_protocols::ext::image_capture_source::v1::client::ext_image_capture_source_v1::Event,
-        _: &(), _: &Connection, _: &QueueHandle<Self>,
-    ) {}
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 // --- ext_foreign_toplevel_image_capture_source_manager_v1 ---
 
 impl Dispatch<ExtForeignToplevelImageCaptureSourceManagerV1, ()> for State {
     fn event(
-        _: &mut Self, _: &ExtForeignToplevelImageCaptureSourceManagerV1,
+        _: &mut Self,
+        _: &ExtForeignToplevelImageCaptureSourceManagerV1,
         _: wayland_protocols::ext::image_capture_source::v1::client::ext_foreign_toplevel_image_capture_source_manager_v1::Event,
-        _: &(), _: &Connection, _: &QueueHandle<Self>,
-    ) {}
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 // --- ext_image_copy_capture_manager_v1 ---
 
 impl Dispatch<ExtImageCopyCaptureManagerV1, ()> for State {
     fn event(
-        _: &mut Self, _: &ExtImageCopyCaptureManagerV1,
+        _: &mut Self,
+        _: &ExtImageCopyCaptureManagerV1,
         _: wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_capture_manager_v1::Event,
-        _: &(), _: &Connection, _: &QueueHandle<Self>,
-    ) {}
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 // --- ext_image_copy_capture_session_v1 ---

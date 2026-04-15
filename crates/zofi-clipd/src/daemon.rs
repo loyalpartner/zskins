@@ -217,9 +217,8 @@ fn handle_ipc(
     qh: &QueueHandle<State>,
 ) {
     stream.set_nonblocking(false).ok();
-    let resp = match ipc::read_request(BufReader::new(
-        stream.try_clone().expect("dup ipc stream"),
-    )) {
+    let resp = match ipc::read_request(BufReader::new(stream.try_clone().expect("dup ipc stream")))
+    {
         Ok(req) => apply_request(req, state, db, device, manager, qh),
         Err(e) => Response::Error {
             message: format!("{e:#}"),
