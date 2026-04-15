@@ -183,6 +183,13 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for AppState {
             _ => {}
         }
     }
+
+    // The manager's `toplevel` event creates a new `ZwlrForeignToplevelHandleV1`
+    // child. wayland-client's default `event_created_child` panics to force us
+    // to specify what user data to attach to the child proxy.
+    wayland_client::event_created_child!(AppState, ZwlrForeignToplevelManagerV1, [
+        zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE => (ZwlrForeignToplevelHandleV1, ()),
+    ]);
 }
 
 impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for AppState {

@@ -7703,25 +7703,29 @@ dependencies = [
  "nix 0.29.0",
  "once_cell",
  "rayon",
+ "rusqlite",
  "serde_json",
  "syntect",
+ "tempfile",
+ "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
  "two-face",
  "unicode-segmentation",
  "walkdir",
  "zofi-clipd",
+ "zwindows",
 ]
 
 [[package]]
 name = "zofi-clipd"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "blake3",
  "nix 0.29.0",
  "rusqlite",
  "serde",
- "serde_json",
  "thiserror 2.0.18",
  "tracing",
  "uuid",
@@ -7830,9 +7834,14 @@ name = "zwindows"
 version = "0.1.0"
 dependencies = [
  "async-channel 2.5.0",
+ "nix 0.29.0",
+ "png 0.17.16",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
  "wayland-client",
+ "wayland-protocols",
  "wayland-protocols-wlr",
 ]

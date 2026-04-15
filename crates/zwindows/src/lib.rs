@@ -6,11 +6,16 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 mod client;
 mod registry;
+pub mod screencopy;
+pub mod sway_tree;
+pub mod toplevel_capture;
 
 pub use client::{spawn, ToplevelHandle};
+pub use screencopy::RgbaBuffer;
 
 /// Snapshot of a single toplevel's state. Clones are cheap enough for our
 /// channel-based fan-out; the struct is small and strings are typically short.
@@ -54,4 +59,29 @@ pub enum Error {
 pub struct Client {
     pub events: async_channel::Receiver<ToplevelEvent>,
     pub handles: Arc<RwLock<HashMap<u64, ToplevelHandle>>>,
+}
+
+impl Client {
+    /// Capture every window into a packed-RGBA buffer keyed by `(app_id, title)`.
+    ///
+    /// Uses the ext-image-copy-capture protocol for per-toplevel capture,
+    /// which works for minimized / off-screen windows too.
+    ///
+    /// Returns an empty map on capture errors or when nothing matches — the
+    /// caller is expected to degrade to no-preview.
+    pub fn capture_windows(timeout: Duration) -> HashMap<(String, String), RgbaBuffer> {
+        match toplevel_capture::capture_toplevels(timeout) {
+            Ok(map) => {
+                tracing::info!(
+                    "capture_windows: ext toplevel capture returned {} windows",
+                    map.len()
+                );
+                map
+            }
+            Err(e) => {
+                tracing::warn!("capture_windows: ext toplevel capture failed: {e}");
+                HashMap::new()
+            }
+        }
+    }
 }

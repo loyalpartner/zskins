@@ -6,10 +6,15 @@ description = "Client wrapper for wlr-foreign-toplevel-management-unstable-v1 (l
 
 [dependencies]
 wayland-client.workspace = true
+wayland-protocols.workspace = true
 wayland-protocols-wlr.workspace = true
 async-channel.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+nix = { workspace = true, features = ["mman", "fs"] }
+png = "0.17"
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
