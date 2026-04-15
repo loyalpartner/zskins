@@ -6,7 +6,7 @@
 //! listener fd. No tokio, no calloop, no extra threads.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufReader, Read};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 
@@ -80,6 +80,11 @@ enum OfferError {
 const TEXT_CAP_BYTES: usize = 1_000_000;
 const IMAGE_CAP_BYTES: usize = 10_000_000;
 const DEFAULT_RING_SIZE: usize = 500;
+/// Advertised alongside our own MIME so we can recognise our own offers
+/// without reading them. Reading would self-deadlock on payloads larger than
+/// the pipe buffer (`Send` writes `held_content` during the same roundtrip
+/// that's waiting for the read end to drain).
+const SELF_MIME: &str = "application/x-zofi-clipd-self";
 
 struct State {
     /// Mimes advertised by an offer.
@@ -92,9 +97,6 @@ struct State {
     held_source: Option<ZwlrDataControlSourceV1>,
     held_mime: String,
     held_content: Vec<u8>,
-    /// Content hash of what we just set as selection. Skip the next watcher
-    /// event if its content hashes to the same value.
-    expect_self_hash: Option<[u8; 32]>,
 }
 
 impl State {
@@ -105,7 +107,6 @@ impl State {
             held_source: None,
             held_mime: String::new(),
             held_content: Vec::new(),
-            expect_self_hash: None,
         }
     }
 }
@@ -216,17 +217,9 @@ fn handle_ipc(
     qh: &QueueHandle<State>,
 ) {
     stream.set_nonblocking(false).ok();
-    let mut line = String::new();
-    let read_result = (|| -> std::io::Result<()> {
-        let mut reader = BufReader::new(&mut stream);
-        reader.read_line(&mut line)?;
-        Ok(())
-    })();
-    if let Err(e) = read_result {
-        tracing::warn!("ipc read: {e}");
-        return;
-    }
-    let resp = match ipc::parse_request(&line) {
+    let resp = match ipc::read_request(BufReader::new(
+        stream.try_clone().expect("dup ipc stream"),
+    )) {
         Ok(req) => apply_request(req, state, db, device, manager, qh),
         Err(e) => Response::Error {
             message: format!("{e:#}"),
@@ -270,6 +263,32 @@ fn apply_request(
                 message: format!("db get: {e:#}"),
             },
         },
+        Request::SetSelection { mime, bytes } => {
+            if bytes.is_empty() {
+                return Response::Error {
+                    message: "set_selection: empty payload".into(),
+                };
+            }
+            // Reject unknown MIME families outright — `preview::build_from_bytes`
+            // assumes UTF-8 text and silently producing a garbled preview for
+            // arbitrary binary payloads is worse than failing the request.
+            let Some(kind) = classify_mime(&mime) else {
+                return Response::Error {
+                    message: format!("set_selection: unsupported mime {mime}"),
+                };
+            };
+            let preview = match kind {
+                Kind::Text => Some(crate::preview::build_from_bytes(&bytes)),
+                Kind::Image => None,
+            };
+            if let Err(e) = db.record(kind, &mime, &bytes, preview.as_deref(), &[]) {
+                return Response::Error {
+                    message: format!("db record: {e:#}"),
+                };
+            }
+            hold_selection(state, device, manager, qh, mime, bytes);
+            Response::Ok
+        }
     }
 }
 
@@ -286,9 +305,9 @@ fn hold_selection(
     }
     let source = manager.create_data_source(qh, ());
     source.offer(mime.clone());
+    source.offer(SELF_MIME.to_string());
     device.set_selection(Some(&source));
 
-    state.expect_self_hash = Some(*blake3::hash(&content).as_bytes());
     state.held_mime = mime;
     state.held_content = content;
     state.held_source = Some(source);
@@ -310,6 +329,16 @@ fn process_offer(
         .get(&offer.id())
         .cloned()
         .unwrap_or_default();
+
+    // Self-loop suppression: our own sources advertise SELF_MIME so we can
+    // skip without reading. Calling `receive` on our own offer deadlocks for
+    // payloads larger than the pipe buffer — the `Send` dispatch would be
+    // writing `held_content` inside the same roundtrip that's blocked
+    // waiting for us to drain the read end.
+    if mimes.iter().any(|m| m == SELF_MIME) {
+        return Ok(());
+    }
+
     let (kind, primary_mime) =
         pick_mime(&mimes).ok_or_else(|| OfferError::NoMime(mimes.clone()))?;
 
@@ -321,15 +350,6 @@ fn process_offer(
     let primary_content = receive(offer, &primary_mime, cap, queue, state)?;
     if primary_content.is_empty() {
         return Err(OfferError::EmptyContent(primary_mime));
-    }
-
-    // Self-loop suppression: while we hold a source, the compositor
-    // re-broadcasts our selection multiple times per copy. Suppress every
-    // event whose primary content matches what we put on the wire — only
-    // cleared when our source is Cancelled (see Source dispatch impl).
-    let hash = *blake3::hash(&primary_content).as_bytes();
-    if state.expect_self_hash.as_ref() == Some(&hash) {
-        return Ok(());
     }
 
     // Drain every other recognized mime the source advertised.
@@ -390,12 +410,20 @@ fn drain_extra_mimes(
 }
 
 fn worth_keeping(mime: &str, kind: Kind) -> bool {
-    match kind {
-        Kind::Text => {
-            let m = mime.to_ascii_lowercase();
-            m.starts_with("text/") || m == "utf8_string" || m == "string"
-        }
-        Kind::Image => mime.to_ascii_lowercase().starts_with("image/"),
+    classify_mime(mime) == Some(kind)
+}
+
+/// Categorize a MIME into the kinds we persist. Returns `None` for anything
+/// we don't know how to preview or store — callers should reject rather than
+/// guess.
+fn classify_mime(mime: &str) -> Option<Kind> {
+    let m = mime.to_ascii_lowercase();
+    if m.starts_with("image/") {
+        Some(Kind::Image)
+    } else if m.starts_with("text/") || m == "utf8_string" || m == "string" {
+        Some(Kind::Text)
+    } else {
+        None
     }
 }
 
@@ -584,7 +612,6 @@ impl Dispatch<ZwlrDataControlSourceV1, ()> for State {
                 }
                 state.held_content.clear();
                 state.held_mime.clear();
-                state.expect_self_hash = None;
             }
             _ => {}
         }

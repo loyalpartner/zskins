@@ -1,7 +1,9 @@
-//! Newline-delimited JSON over a Unix socket. One request per connection,
-//! one response, then close.
+//! Length-prefixed bincode frames over a Unix socket. One request per
+//! connection, one response, then close. bincode handles the framing for
+//! `Vec<u8>` payloads (e.g. image bytes inside `SetSelection`) so we don't
+//! need a separate header/payload split.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::os::unix::net::UnixStream;
 
 use serde::{Deserialize, Serialize};
@@ -14,21 +16,25 @@ pub enum IpcError {
     Connect(#[source] std::io::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
-    #[error("json: {0}")]
-    Json(#[from] serde_json::Error),
+    #[error("bincode: {0}")]
+    Bincode(#[from] bincode::Error),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
     /// Touch the item's `last_used_at` and become the wayland selection
     /// holder serving its content. `mime` selects which representation to
     /// serve; `None` falls back to the item's `primary_mime`.
     Activate { uuid: String, mime: Option<String> },
+
+    /// Record `bytes` as a new clipboard entry of `mime`, then immediately
+    /// hold it as the active selection. Lets ephemeral callers (the
+    /// launcher's image copy) hand off ownership to the long-lived daemon
+    /// and exit without losing the clipboard.
+    SetSelection { mime: String, bytes: Vec<u8> },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
 pub enum Response {
     Ok,
     Error { message: String },
@@ -36,23 +42,18 @@ pub enum Response {
 
 pub fn send(req: &Request) -> Result<Response, IpcError> {
     let mut stream = UnixStream::connect(paths::sock_path()).map_err(IpcError::Connect)?;
-    let line = serde_json::to_string(req)?;
-    stream.write_all(line.as_bytes())?;
-    stream.write_all(b"\n")?;
-    let mut reader = BufReader::new(stream);
-    let mut buf = String::new();
-    reader.read_line(&mut buf)?;
-    let resp: Response = serde_json::from_str(buf.trim())?;
+    bincode::serialize_into(&mut stream, req)?;
+    stream.flush()?;
+    let resp: Response = bincode::deserialize_from(&mut stream)?;
     Ok(resp)
 }
 
-pub fn parse_request(line: &str) -> Result<Request, IpcError> {
-    Ok(serde_json::from_str(line.trim())?)
+pub fn read_request<R: std::io::Read>(reader: R) -> Result<Request, IpcError> {
+    Ok(bincode::deserialize_from(reader)?)
 }
 
 pub fn write_response(stream: &mut UnixStream, resp: &Response) -> Result<(), IpcError> {
-    let line = serde_json::to_string(resp)?;
-    stream.write_all(line.as_bytes())?;
-    stream.write_all(b"\n")?;
+    bincode::serialize_into(&mut *stream, resp)?;
+    stream.flush()?;
     Ok(())
 }
