@@ -14,6 +14,13 @@ pub struct DesktopEntry {
     pub icon_path: Option<PathBuf>,
     pub icon_data: Option<Arc<gpui::Image>>,
     pub search_key: String,
+    /// The `.desktop` file's stem, e.g. `org.gnome.Calculator`. Used by
+    /// `WindowsSource` to match Wayland `app_id`s back to the entry whose icon
+    /// we've already loaded.
+    pub file_stem: String,
+    /// `StartupWMClass=` value — the most reliable link between an X11/XWayland
+    /// app's window class and its `.desktop` entry.
+    pub startup_wm_class: Option<String>,
 }
 
 /// Load all visible Application-type .desktop entries.
@@ -42,7 +49,12 @@ pub fn load_entries() -> Vec<DesktopEntry> {
     let parsed: Vec<(String, DesktopEntry)> = paths
         .par_iter()
         .filter_map(|path| {
-            let de = parse_desktop_file(path)?;
+            let mut de = parse_desktop_file(path)?;
+            de.file_stem = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let key = path
                 .file_name()
                 .unwrap_or_default()
@@ -83,6 +95,7 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopEntry> {
     let mut entry_type: Option<String> = None;
     let mut no_display = false;
     let mut hidden = false;
+    let mut startup_wm_class: Option<String> = None;
 
     for line in content.lines() {
         let line = line.trim();
@@ -116,6 +129,11 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopEntry> {
                 "Type" => entry_type = Some(value.to_string()),
                 "NoDisplay" => no_display = value.eq_ignore_ascii_case("true"),
                 "Hidden" => hidden = value.eq_ignore_ascii_case("true"),
+                "StartupWMClass" => {
+                    if !value.is_empty() {
+                        startup_wm_class = Some(value.to_string());
+                    }
+                }
                 _ => {}
             }
         }
@@ -138,6 +156,8 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopEntry> {
         icon_path: None,
         icon_data: None,
         search_key,
+        file_stem: String::new(),
+        startup_wm_class,
     })
 }
 
