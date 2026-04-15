@@ -2,34 +2,53 @@ mod desktop;
 mod icon;
 
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 use gpui::{div, img, prelude::*, AnyElement, FontWeight, ObjectFit};
 
-use crate::source::{ActivateOutcome, Source};
+use crate::source::{ActivateOutcome, Layout, Preview, Source};
 use crate::theme;
+use crate::usage::UsageTracker;
 
 pub use desktop::DesktopEntry;
 
+/// Matches `UsageTracker` rows — shared with `WindowsSource` via the tracker's
+/// `source` column. Keeping it as a const avoids typo divergence between the
+/// two write paths.
+pub const SOURCE_NAME: &str = "apps";
+
 pub struct AppsSource {
     entries: Vec<DesktopEntry>,
+    tracker: Arc<UsageTracker>,
 }
 
 impl AppsSource {
-    pub fn load() -> Self {
+    pub fn load(tracker: Arc<UsageTracker>) -> Self {
         let entries = desktop::load_entries();
         tracing::info!("loaded {} desktop entries", entries.len());
         let entries = icon::resolve_icons(entries);
-        Self { entries }
+        Self { entries, tracker }
+    }
+
+    /// Expose the preloaded `.desktop` entries so other sources (notably
+    /// `WindowsSource`) can reuse their already-decoded `icon_data` instead of
+    /// re-resolving through `icon-theme`.
+    pub fn entries(&self) -> &[DesktopEntry] {
+        &self.entries
     }
 }
 
 impl Source for AppsSource {
     fn name(&self) -> &'static str {
-        "apps"
+        SOURCE_NAME
     }
 
     fn icon(&self) -> &'static str {
-        "⊞"
+        "🚀"
+    }
+
+    fn prefix(&self) -> Option<char> {
+        Some('>')
     }
 
     fn placeholder(&self) -> &'static str {
@@ -90,6 +109,54 @@ impl Source for AppsSource {
         launch(&self.entries[ix]);
         ActivateOutcome::Quit
     }
+
+    fn weight(&self, ix: usize) -> i32 {
+        let Some(entry) = self.entries.get(ix) else {
+            return 0;
+        };
+        if entry.file_stem.is_empty() {
+            return 0;
+        }
+        self.tracker.frecency_bonus(SOURCE_NAME, &entry.file_stem)
+    }
+
+    fn item_key(&self, ix: usize) -> Option<String> {
+        let entry = self.entries.get(ix)?;
+        if entry.file_stem.is_empty() {
+            return None;
+        }
+        Some(entry.file_stem.clone())
+    }
+
+    fn layout(&self) -> Layout {
+        Layout::ListAndPreview
+    }
+
+    fn preview(&self, ix: usize) -> Option<Preview> {
+        let entry = self.entries.get(ix)?;
+        let mut out = String::new();
+        out.push_str(&entry.name);
+        out.push_str("\n\n");
+        out.push_str("Exec\n");
+        out.push_str(entry.exec.trim());
+        out.push('\n');
+        if let Some(ref icon) = entry.icon_name {
+            out.push_str("\nIcon\n");
+            out.push_str(icon);
+            out.push('\n');
+        }
+        if !entry.file_stem.is_empty() {
+            out.push_str("\nDesktop ID\n");
+            out.push_str(&entry.file_stem);
+            out.push('\n');
+        }
+        if let Some(ref wm) = entry.startup_wm_class {
+            out.push_str("\nStartupWMClass\n");
+            out.push_str(wm);
+            out.push('\n');
+        }
+        Some(Preview::Text(out))
+    }
 }
 
 fn render_icon(entry: &DesktopEntry) -> gpui::Div {
@@ -132,5 +199,64 @@ fn launch(entry: &DesktopEntry) {
             Ok(_) => tracing::info!("launched: {}", entry.name),
             Err(e) => tracing::error!("failed to launch {}: {e}", entry.name),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::usage::UsageTracker;
+
+    fn entry(name: &str, stem: &str) -> DesktopEntry {
+        DesktopEntry {
+            name: name.to_string().into(),
+            exec: String::new(),
+            icon_name: None,
+            icon_path: None,
+            icon_data: None,
+            search_key: name.to_lowercase(),
+            file_stem: stem.to_string(),
+            startup_wm_class: None,
+        }
+    }
+
+    fn source_with(entries: Vec<DesktopEntry>, tracker: Arc<UsageTracker>) -> AppsSource {
+        AppsSource { entries, tracker }
+    }
+
+    #[test]
+    fn item_key_returns_file_stem() {
+        let tracker = Arc::new(UsageTracker::open_in_memory().unwrap());
+        let s = source_with(vec![entry("Firefox", "firefox")], tracker);
+        assert_eq!(s.item_key(0).as_deref(), Some("firefox"));
+    }
+
+    #[test]
+    fn item_key_is_none_when_file_stem_is_empty() {
+        // Some .desktop entries synthesised at runtime (e.g. bulk import paths)
+        // may not have a file stem — such rows opt out of MRU cleanly rather
+        // than corrupting the DB with an empty key.
+        let tracker = Arc::new(UsageTracker::open_in_memory().unwrap());
+        let s = source_with(vec![entry("NoStem", "")], tracker);
+        assert_eq!(s.item_key(0), None);
+    }
+
+    #[test]
+    fn weight_is_zero_by_default() {
+        let tracker = Arc::new(UsageTracker::open_in_memory().unwrap());
+        let s = source_with(vec![entry("Firefox", "firefox")], tracker);
+        assert_eq!(s.weight(0), 0);
+    }
+
+    #[test]
+    fn weight_reflects_tracker_bonus_after_record() {
+        // Record activations through the shared tracker; weight() must pick
+        // up the resulting frecency bonus immediately on the next read.
+        let tracker = Arc::new(UsageTracker::open_in_memory().unwrap());
+        for _ in 0..5 {
+            tracker.record(SOURCE_NAME, "firefox");
+        }
+        let s = source_with(vec![entry("Firefox", "firefox")], tracker);
+        assert!(s.weight(0) > 0);
     }
 }
