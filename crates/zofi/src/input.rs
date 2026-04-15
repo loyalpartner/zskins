@@ -59,9 +59,10 @@ pub fn input_key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-left", WordLeft, Some("TextInput")),
         KeyBinding::new("ctrl-right", WordRight, Some("TextInput")),
         KeyBinding::new("ctrl-backspace", DeleteWord, Some("TextInput")),
-        // Clipboard
+        // Clipboard. ctrl-c is reserved for the launcher's CopyImage action
+        // (window screenshots → clipboard); text-selection copy uses shift.
         KeyBinding::new("ctrl-v", Paste, Some("TextInput")),
-        KeyBinding::new("ctrl-c", Copy, Some("TextInput")),
+        KeyBinding::new("ctrl-shift-c", Copy, Some("TextInput")),
         KeyBinding::new("ctrl-x", Cut, Some("TextInput")),
         // Select all: use shift-ctrl-a since ctrl-a is Home
         KeyBinding::new("shift-ctrl-a", SelectAll, Some("TextInput")),
@@ -70,6 +71,9 @@ pub fn input_key_bindings() -> Vec<KeyBinding> {
 
 /// Callback invoked when text content changes.
 pub type OnChange = Box<dyn Fn(&str, &mut App) + 'static>;
+
+/// Callback invoked when backspace is pressed on an empty input.
+pub type OnEmptyBackspace = Box<dyn Fn(&mut App) + 'static>;
 
 pub struct TextInput {
     focus_handle: FocusHandle,
@@ -82,6 +86,7 @@ pub struct TextInput {
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
     on_change: Option<OnChange>,
+    on_empty_backspace: Option<OnEmptyBackspace>,
 }
 
 impl TextInput {
@@ -97,11 +102,17 @@ impl TextInput {
             last_bounds: None,
             is_selecting: false,
             on_change: None,
+            on_empty_backspace: None,
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_on_change(&mut self, callback: OnChange) {
         self.on_change = Some(callback);
+    }
+
+    pub fn set_on_empty_backspace(&mut self, callback: OnEmptyBackspace) {
+        self.on_empty_backspace = Some(callback);
     }
 
     pub fn content(&self) -> &SharedString {
@@ -193,6 +204,12 @@ impl TextInput {
         if self.selected_range.is_empty() {
             let prev = self.previous_boundary(self.cursor_offset());
             if self.cursor_offset() == prev {
+                // Cursor at the start of an empty input — notify the launcher.
+                if self.content.is_empty() {
+                    if let Some(ref cb) = self.on_empty_backspace {
+                        cb(cx);
+                    }
+                }
                 return;
             }
             self.select_to(prev, cx);

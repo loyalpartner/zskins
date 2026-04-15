@@ -9,9 +9,14 @@ pub const SPLIT_LIST_W: Pixels = px(360.0);
 pub const SPLIT_PREVIEW_W: Pixels = px(720.0);
 /// In split layout: taller panel so images and long text breathe.
 pub const SPLIT_PANEL_H: Pixels = px(540.0);
+/// Preview pane inner image area after pane padding (px(20) horizontal,
+/// px(16) vertical — see `render_preview_pane`). Used by window thumbnail
+/// pre-shrinking so the GPU bilinear sampler does near-identity resampling.
+pub const PREVIEW_IMG_MAX_W: Pixels = px(680.0);
+pub const PREVIEW_IMG_MAX_H: Pixels = px(508.0);
 pub const PANEL_RADIUS: Pixels = px(10.0);
 
-pub const ICON_SIZE: Pixels = px(18.0);
+pub const ICON_SIZE: Pixels = px(24.0);
 pub const ITEM_HEIGHT: Pixels = px(38.0);
 pub const ITEM_RADIUS: Pixels = px(6.0);
 pub const INPUT_HEIGHT: Pixels = px(36.0);
