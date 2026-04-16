@@ -114,6 +114,14 @@ pub fn kbd_accent_border() -> Hsla {
     rgb_alpha(0x4f8cff, 0.45)
 }
 
+// Preview-header "active" pill: green text on a translucent green bg.
+pub fn pill_active_fg() -> Hsla {
+    rgb(0x5ecf8a).into()
+}
+pub fn pill_active_bg() -> Hsla {
+    rgb_alpha(0x5ecf8a, 0.15)
+}
+
 /// Per-source tint for icons in the source bar and union gutter. Unknown
 /// names fall back to the generic `accent()` so new sources are never
 /// visually broken — just un-tinted until they get a palette entry.

@@ -24,6 +24,28 @@ pub enum ActivateOutcome {
     Refresh,
 }
 
+/// A small badge shown in the preview header (e.g. "active" for the
+/// currently-focused window). `active=true` uses the green pill palette;
+/// `active=false` uses the neutral dim palette.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewPill {
+    pub text: String,
+    pub active: bool,
+}
+
+/// Header + metadata strip chrome surrounding a preview. Sources opt in
+/// via [`Source::preview_chrome`] — returning `None` keeps the preview
+/// pane flush (no title bar, no bottom strip) the way it was before.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewChrome {
+    pub title: String,
+    pub pills: Vec<PreviewPill>,
+    /// (label, value) pairs rendered in a monospaced strip under the
+    /// preview body — useful for stable identifiers like app IDs or
+    /// desktop file stems that don't belong in the title.
+    pub metadata: Vec<(String, String)>,
+}
+
 /// Metadata for a source entry in UI (name + icon glyph).
 ///
 /// Declared here so [`Source::sub_sources`] can return it without exposing
@@ -71,6 +93,13 @@ pub trait Source: 'static {
     /// Preview content for the given index. Only consulted when
     /// `layout()` is `ListAndPreview`.
     fn preview(&self, _ix: usize) -> Option<Preview> {
+        None
+    }
+
+    /// Optional header chrome shown around the preview body — a title,
+    /// status pills, and a metadata strip. Returning `None` keeps the
+    /// preview pane as a plain body (the pre-chrome behavior).
+    fn preview_chrome(&self, _ix: usize) -> Option<PreviewChrome> {
         None
     }
 

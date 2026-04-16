@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use gpui::{div, prelude::*, px, AnyElement, Image};
 
-use crate::source::{ActivateOutcome, Layout, Preview, Source, SourceMeta};
+use crate::source::{ActivateOutcome, Layout, Preview, PreviewChrome, Source, SourceMeta};
 use crate::theme;
 
 /// Width of the source-type gutter shown next to each row in mixed view.
@@ -228,6 +228,11 @@ impl Source for UnionSource {
     fn preview(&self, ix: usize) -> Option<Preview> {
         let r = self.route(ix);
         self.children[r.child_idx].preview(r.inner_ix)
+    }
+
+    fn preview_chrome(&self, ix: usize) -> Option<PreviewChrome> {
+        let r = self.route(ix);
+        self.children[r.child_idx].preview_chrome(r.inner_ix)
     }
 
     fn peek_image(&self, ix: usize) -> Option<Arc<Image>> {

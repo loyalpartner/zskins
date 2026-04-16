@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use gpui::{div, prelude::*, AnyElement, FontWeight, Image, ImageFormat, ObjectFit};
 
-use crate::source::{ActivateOutcome, Layout, Preview, Source};
+use crate::source::{ActivateOutcome, Layout, Preview, PreviewChrome, PreviewPill, Source};
 use crate::sources::icon as shared_icon;
 use crate::theme;
 use crate::usage::UsageTracker;
@@ -599,6 +599,27 @@ impl Source for WindowsSource {
 
     fn can_copy_image(&self) -> bool {
         true
+    }
+
+    fn preview_chrome(&self, ix: usize) -> Option<PreviewChrome> {
+        let items = self.items.read().unwrap();
+        let row = items.get(ix)?;
+        let mut pills = Vec::new();
+        if row.activated {
+            pills.push(PreviewPill {
+                text: "active".into(),
+                active: true,
+            });
+        }
+        let metadata = vec![
+            ("App".into(), row.app_id.clone()),
+            ("ID".into(), format!("0x{:x}", row.id)),
+        ];
+        Some(PreviewChrome {
+            title: row.display_label.clone(),
+            pills,
+            metadata,
+        })
     }
 
     fn preview(&self, ix: usize) -> Option<Preview> {

@@ -9,7 +9,9 @@ use gpui::{
 use crate::highlight;
 use crate::input::TextInput;
 use crate::registry::SourceRegistry;
-use crate::source::{ActivateOutcome, Layout, Preview, Source, SourceMeta};
+use crate::source::{
+    ActivateOutcome, Layout, Preview, PreviewChrome, PreviewPill, Source, SourceMeta,
+};
 use crate::theme;
 
 const PREVIEW_TEXT_MAX_LINES: usize = 200;
@@ -744,6 +746,13 @@ impl Launcher {
             Some(&i) => i,
             None => return div().size_full().bg(theme::preview_bg()).into_any_element(),
         };
+        // Header/metadata chrome is an opt-in per source. Mime view suppresses
+        // it: the right pane is showing a mime variant, not the item itself,
+        // so the item-level title/metadata would be misleading.
+        let chrome = match self.left_pane {
+            LeftPane::Items => self.source().preview_chrome(item_ix),
+            LeftPane::Mimes => None,
+        };
         let preview = match self.left_pane {
             LeftPane::Items => self.source().preview(item_ix),
             LeftPane::Mimes => match self.mime_cache.get(self.mimes.selected) {
@@ -752,34 +761,32 @@ impl Launcher {
             },
         };
 
-        let pane = div()
-            .size_full()
-            .bg(theme::preview_bg())
-            .px(px(20.0))
-            .py(px(16.0))
-            .overflow_hidden();
-        match preview {
+        let body_container = div().flex_1().min_h_0().overflow_hidden();
+        let body: AnyElement = match preview {
             Some(Preview::Text(s)) => {
-                let body: String = s
+                let text: String = s
                     .lines()
                     .take(PREVIEW_TEXT_MAX_LINES)
                     .collect::<Vec<_>>()
                     .join("\n");
-                pane.id("preview-text")
+                body_container
+                    .id("preview-text")
                     .overflow_y_scroll()
+                    .px(px(20.0))
+                    .py(px(16.0))
                     .text_size(theme::PREVIEW_FONT_SIZE)
                     .line_height(px(22.0))
                     .text_color(theme::fg())
-                    .child(body)
+                    .child(text)
                     .into_any_element()
             }
             Some(Preview::Code { text, lang }) => {
-                let body: String = text
+                let code: String = text
                     .lines()
                     .take(PREVIEW_TEXT_MAX_LINES)
                     .collect::<Vec<_>>()
                     .join("\n");
-                let runs = highlight::highlight(&body, &lang, theme::fg());
+                let runs = highlight::highlight(&code, &lang, theme::fg());
                 let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = runs
                     .into_iter()
                     .map(|(r, color)| {
@@ -792,18 +799,23 @@ impl Launcher {
                         )
                     })
                     .collect();
-                pane.id("preview-code")
+                body_container
+                    .id("preview-code")
                     .overflow_y_scroll()
+                    .px(px(20.0))
+                    .py(px(16.0))
                     .text_size(theme::PREVIEW_FONT_SIZE)
                     .line_height(px(22.0))
                     .text_color(theme::fg())
-                    .child(StyledText::new(body).with_highlights(highlights))
+                    .child(StyledText::new(code).with_highlights(highlights))
                     .into_any_element()
             }
-            Some(Preview::Image(image)) => pane
+            Some(Preview::Image(image)) => body_container
                 .flex()
                 .items_center()
                 .justify_center()
+                .px(px(20.0))
+                .py(px(16.0))
                 .child(
                     img(image)
                         .max_w_full()
@@ -812,7 +824,7 @@ impl Launcher {
                         .rounded(px(4.0)),
                 )
                 .into_any_element(),
-            None => pane
+            None => body_container
                 .flex()
                 .items_center()
                 .justify_center()
@@ -820,7 +832,22 @@ impl Launcher {
                 .text_size(theme::FONT_SIZE_SM)
                 .child("(no preview)")
                 .into_any_element(),
-        }
+        };
+
+        let header = chrome.as_ref().map(preview_header);
+        let footer = chrome
+            .as_ref()
+            .filter(|c| !c.metadata.is_empty())
+            .map(preview_metadata_strip);
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(theme::preview_bg())
+            .children(header)
+            .child(body)
+            .children(footer)
+            .into_any_element()
     }
 
     /// Full-screen peek overlay: dark backdrop + centered full-resolution
@@ -1323,6 +1350,79 @@ fn img_el_for_peek(image: std::sync::Arc<gpui::Image>) -> AnyElement {
         .into_any_element()
 }
 
+/// Title + status pills above the preview body. The whole thing is one
+/// row separated from the body by a bottom border — lines up with the
+/// search-bar separator style.
+fn preview_header(c: &PreviewChrome) -> gpui::Div {
+    let mut row = div()
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .px(px(16.0))
+        .py(px(10.0))
+        .border_b_1()
+        .border_color(theme::panel_border())
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .text_size(px(14.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme::fg())
+                .child(c.title.clone()),
+        );
+    for pill in &c.pills {
+        row = row.child(render_pill(pill));
+    }
+    row
+}
+
+/// Single status pill: green on translucent green for `active=true`,
+/// neutral dim for everything else.
+fn render_pill(p: &PreviewPill) -> gpui::Div {
+    let (fg, bg) = if p.active {
+        (theme::pill_active_fg(), theme::pill_active_bg())
+    } else {
+        (theme::fg_dim(), theme::kbd_bg())
+    };
+    div()
+        .px(px(8.0))
+        .py(px(3.0))
+        .rounded(px(999.0))
+        .bg(bg)
+        .text_color(fg)
+        .text_size(px(11.0))
+        .child(p.text.clone())
+}
+
+/// Bottom metadata strip: `(label, value)` pairs in a dim monospaced row.
+/// Caller is responsible for skipping this when `metadata` is empty —
+/// rendering an empty border would just leave a visual hairline.
+fn preview_metadata_strip(c: &PreviewChrome) -> gpui::Div {
+    let mut row = div()
+        .flex()
+        .gap(px(18.0))
+        .px(px(16.0))
+        .py(px(8.0))
+        .border_t_1()
+        .border_color(theme::panel_border())
+        .text_size(px(11.0))
+        .text_color(theme::fg_dim());
+    for (k, v) in &c.metadata {
+        row = row.child(
+            div()
+                .flex()
+                .gap(px(6.0))
+                .child(div().text_color(theme::fg()).child(k.clone()))
+                .child(div().child(v.clone())),
+        );
+    }
+    row
+}
+
 fn key_hint(label: &str, key: &str, primary: bool) -> gpui::Div {
     let label_color = if primary {
         gpui::white()
@@ -1350,6 +1450,7 @@ fn key_hint(label: &str, key: &str, primary: bool) -> gpui::Div {
     } else {
         theme::kbd_border()
     };
+
 
     div()
         .flex()

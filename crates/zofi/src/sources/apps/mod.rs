@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use gpui::{div, img, prelude::*, AnyElement, FontWeight, ObjectFit};
 
-use crate::source::{ActivateOutcome, Layout, Preview, Source};
+use crate::source::{ActivateOutcome, Layout, Preview, PreviewChrome, Source};
 use crate::theme;
 use crate::usage::UsageTracker;
 
@@ -151,6 +151,22 @@ impl Source for AppsSource {
 
     fn layout(&self) -> Layout {
         Layout::ListAndPreview
+    }
+
+    fn preview_chrome(&self, ix: usize) -> Option<PreviewChrome> {
+        let entry = self.entries.get(ix)?;
+        let mut metadata: Vec<(String, String)> = Vec::new();
+        if !entry.file_stem.is_empty() {
+            metadata.push(("File".into(), entry.file_stem.clone()));
+        }
+        if let Some(ref cls) = entry.startup_wm_class {
+            metadata.push(("Class".into(), cls.clone()));
+        }
+        Some(PreviewChrome {
+            title: entry.name.to_string(),
+            pills: Vec::new(),
+            metadata,
+        })
     }
 
     fn preview(&self, ix: usize) -> Option<Preview> {
