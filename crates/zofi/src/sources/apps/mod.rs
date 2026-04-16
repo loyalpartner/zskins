@@ -48,7 +48,7 @@ impl Source for AppsSource {
     }
 
     fn prefix(&self) -> Option<char> {
-        None
+        Some('>')
     }
 
     fn placeholder(&self) -> &'static str {
@@ -104,11 +104,7 @@ impl Source for AppsSource {
                             } else {
                                 FontWeight::NORMAL
                             })
-                            .text_color(if selected {
-                                gpui::white()
-                            } else {
-                                theme::fg()
-                            })
+                            .text_color(if selected { gpui::white() } else { theme::fg() })
                             .child(entry.name.clone()),
                     )
                     .when(!subtitle.is_empty(), |d| {

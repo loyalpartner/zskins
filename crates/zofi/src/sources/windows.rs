@@ -279,7 +279,7 @@ impl WindowsSource {
         // silent — unsupported compositors just lose the "active" pill.
         let ipc = zwindows::compositor::detect();
         let pre_focus = ipc.focused_window();
-        tracing::info!("pre-zofi focus: {pre_focus:?}");
+        tracing::debug!("pre-zofi focus: {pre_focus:?}");
 
         Self {
             items,
@@ -373,12 +373,7 @@ fn apply_event(
         Removed(id) => {
             guard.retain(|r| r.id != id);
             // Clear sticky pointer if the activated window just closed.
-            let _ = last_active.compare_exchange(
-                id,
-                0,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            );
+            let _ = last_active.compare_exchange(id, 0, Ordering::Relaxed, Ordering::Relaxed);
         }
     }
 }
@@ -401,6 +396,48 @@ fn resolve_icon_memoised(
     let resolved = resolver(app_id);
     cache.insert(app_id.to_string(), resolved.clone());
     resolved
+}
+
+/// Minimum length required for the shorter side of a partial app_id
+/// match. Below this we fall back to byte-exact equality only.
+const APP_ID_PARTIAL_MIN: usize = 4;
+
+/// True if the row at `(row_app, row_title)` is the same window as the
+/// compositor-reported focus at `(focus_app, focus_title)`. Titles must
+/// match exactly (case-insensitive); app_ids may differ as long as the
+/// shorter side is a *prefix* of the longer side AND the boundary in
+/// the longer side is a non-alphanumeric separator (space, hyphen, dot,
+/// paren, etc.). This admits the XWayland "Class (suffix)" pattern
+/// (`wechat` ⊂ `wechat (universal)`) without admitting `code` ⊂
+/// `vscode` — `vscode` doesn't start with `code`, and `code` is a
+/// suffix only by accidental tokenisation.
+fn focus_matches(row_app: &str, row_title: &str, focus_app: &str, focus_title: &str) -> bool {
+    if row_title.to_lowercase() != focus_title.to_lowercase() {
+        return false;
+    }
+    let row_app_l = row_app.to_lowercase();
+    let focus_app_l = focus_app.to_lowercase();
+    if row_app_l == focus_app_l {
+        return true;
+    }
+    let (short, long) = if row_app_l.len() <= focus_app_l.len() {
+        (row_app_l.as_str(), focus_app_l.as_str())
+    } else {
+        (focus_app_l.as_str(), row_app_l.as_str())
+    };
+    if short.len() < APP_ID_PARTIAL_MIN {
+        return false;
+    }
+    if !long.starts_with(short) {
+        return false;
+    }
+    // Boundary check: the character immediately after `short` in `long`
+    // must not extend a longer identifier. `wechat` ✓ `wechat (universal)`
+    // (next is space), but `firefox` ✗ `firefoxbeta` (next is alphanumeric
+    // letter).
+    long.as_bytes()
+        .get(short.len())
+        .is_none_or(|b| !b.is_ascii_alphanumeric())
 }
 
 fn row_update_in_place(dst: &mut WindowRow, src: WindowRow) {
@@ -578,11 +615,7 @@ impl Source for WindowsSource {
                             } else {
                                 FontWeight::NORMAL
                             })
-                            .text_color(if selected {
-                                gpui::white()
-                            } else {
-                                theme::fg()
-                            })
+                            .text_color(if selected { gpui::white() } else { theme::fg() })
                             .child(row.display_label.clone()),
                     )
                     .when(!subtitle.is_empty(), |d| {
@@ -651,21 +684,19 @@ impl Source for WindowsSource {
         // previously-focused window only ever reports activated=false).
         let last_id = self.last_active.load(Ordering::Relaxed);
         let by_id = last_id == row.id;
-        // Loose match against the sway snapshot: case-insensitive + accept
-        // either an exact (app_id, title) pair OR a substring app_id hit
-        // when the title disagrees. XWayland windows often surface as
-        // `WeChat (Universal)` from one source and `wechat` from the other,
-        // so insisting on byte-exact match silently kills the pill.
-        let by_focus = self.pre_focus.as_ref().is_some_and(|f| {
-            let app_l = f.app_id.to_lowercase();
-            let title_l = f.title.to_lowercase();
-            let row_app = row.app_id.to_lowercase();
-            let row_title = row.title.to_lowercase();
-            let app_match =
-                row_app == app_l || row_app.contains(&app_l) || app_l.contains(&row_app);
-            let title_match = row_title == title_l;
-            app_match && title_match
-        });
+        // Loose match against the sway snapshot: case-insensitive titles
+        // must match exactly, and the app_id must agree by either:
+        //   - exact equality, or
+        //   - one being a prefix/suffix of the other AND the shorter side
+        //     being at least 4 chars long.
+        // The length floor and edge-anchoring kill the "code" ⊂ "vscode"
+        // class of false positives that an unrestricted contains() check
+        // produces, while still recognising `WeChat (Universal)` ⊃ `wechat`
+        // from XWayland.
+        let by_focus = self
+            .pre_focus
+            .as_ref()
+            .is_some_and(|f| focus_matches(&row.app_id, &row.title, &f.app_id, &f.title));
         let is_active = by_id || by_focus;
         let mut pills = Vec::new();
         if is_active {
@@ -675,11 +706,7 @@ impl Source for WindowsSource {
             });
             // Workspace pill rides next to active — only meaningful for
             // the focused window, sourced from the compositor IPC.
-            if let Some(ws) = self
-                .pre_focus
-                .as_ref()
-                .and_then(|f| f.workspace.as_deref())
-            {
+            if let Some(ws) = self.pre_focus.as_ref().and_then(|f| f.workspace.as_deref()) {
                 pills.push(PreviewPill {
                     text: format!("ws · {ws}"),
                     active: false,
@@ -1307,5 +1334,133 @@ mod tests {
             &null_last_active(),
         );
         assert_eq!(*count.lock().unwrap(), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // last_active sticky pointer tests
+    // ------------------------------------------------------------------
+
+    fn activated_toplevel(id: u64, app_id: &str, title: &str) -> zwindows::Toplevel {
+        let mut tl = toplevel(id, app_id, title);
+        tl.activated = true;
+        tl
+    }
+
+    #[test]
+    fn apply_event_sets_last_active_on_activated() {
+        let items: Arc<RwLock<Vec<WindowRow>>> = Arc::new(RwLock::new(Vec::new()));
+        let last_active = null_last_active();
+        apply_event(
+            &items,
+            zwindows::ToplevelEvent::Added(activated_toplevel(7, "firefox", "t")),
+            &null_resolver_fn(),
+            &null_memo(),
+            &last_active,
+        );
+        assert_eq!(last_active.load(Ordering::Relaxed), 7);
+    }
+
+    #[test]
+    fn apply_event_keeps_last_active_when_not_activated() {
+        let items: Arc<RwLock<Vec<WindowRow>>> = Arc::new(RwLock::new(Vec::new()));
+        let last_active = Arc::new(AtomicU64::new(42));
+        apply_event(
+            &items,
+            zwindows::ToplevelEvent::Added(toplevel(7, "firefox", "t")),
+            &null_resolver_fn(),
+            &null_memo(),
+            &last_active,
+        );
+        assert_eq!(last_active.load(Ordering::Relaxed), 42);
+    }
+
+    #[test]
+    fn apply_event_clears_last_active_when_active_window_removed() {
+        let items: Arc<RwLock<Vec<WindowRow>>> = Arc::new(RwLock::new(Vec::new()));
+        let last_active = Arc::new(AtomicU64::new(7));
+        // Seed an existing row so the Removed branch finds something to drop.
+        apply_event(
+            &items,
+            zwindows::ToplevelEvent::Added(toplevel(7, "firefox", "t")),
+            &null_resolver_fn(),
+            &null_memo(),
+            &last_active,
+        );
+        apply_event(
+            &items,
+            zwindows::ToplevelEvent::Removed(7),
+            &null_resolver_fn(),
+            &null_memo(),
+            &last_active,
+        );
+        assert_eq!(last_active.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn apply_event_preserves_last_active_when_other_window_removed() {
+        let items: Arc<RwLock<Vec<WindowRow>>> = Arc::new(RwLock::new(Vec::new()));
+        let last_active = Arc::new(AtomicU64::new(7));
+        apply_event(
+            &items,
+            zwindows::ToplevelEvent::Added(toplevel(8, "kitty", "t")),
+            &null_resolver_fn(),
+            &null_memo(),
+            &last_active,
+        );
+        apply_event(
+            &items,
+            zwindows::ToplevelEvent::Removed(8),
+            &null_resolver_fn(),
+            &null_memo(),
+            &last_active,
+        );
+        assert_eq!(last_active.load(Ordering::Relaxed), 7);
+    }
+
+    // ------------------------------------------------------------------
+    // focus_matches loose-matching tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn focus_matches_exact_app_and_title() {
+        assert!(focus_matches("firefox", "Issues", "firefox", "Issues"));
+    }
+
+    #[test]
+    fn focus_matches_is_case_insensitive() {
+        assert!(focus_matches("Firefox", "Issues", "firefox", "issues"));
+    }
+
+    #[test]
+    fn focus_matches_rejects_when_titles_differ() {
+        assert!(!focus_matches("firefox", "A", "firefox", "B"));
+    }
+
+    #[test]
+    fn focus_matches_accepts_xwayland_prefix() {
+        // wlr-foreign-toplevel reports the WM_CLASS as "wechat" while
+        // sway sees the X11 title as `WeChat (Universal)`.
+        assert!(focus_matches(
+            "wechat (universal)",
+            "Chat",
+            "wechat",
+            "Chat"
+        ));
+    }
+
+    #[test]
+    fn focus_matches_rejects_short_substring_collision() {
+        // Pre-fix: "code" was a 4-letter substring of "vscode" so the old
+        // double-contains check would fire even though they are different
+        // applications. Length floor is 4; both apps are exactly 4+, but
+        // neither is a prefix/suffix of the other, so reject.
+        assert!(!focus_matches("code", "doc", "vscode", "doc"));
+    }
+
+    #[test]
+    fn focus_matches_rejects_below_length_floor() {
+        // "vi" ⊂ "vim" by substring, but ≤3 chars is too short to be a
+        // safe partial match.
+        assert!(!focus_matches("vi", "f", "vim", "f"));
     }
 }
