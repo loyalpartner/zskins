@@ -638,9 +638,23 @@ impl Launcher {
                 div()
                     .size_full()
                     .mx(px(6.0))
-                    .rounded(theme::ITEM_RADIUS)
-                    .bg(theme::selected_bg())
-                    .child(content),
+                    .flex()
+                    .child(
+                        // 3px accent bar anchoring the selected row.
+                        div()
+                            .w(px(3.0))
+                            .my(px(4.0))
+                            .rounded_r(px(2.0))
+                            .bg(theme::accent()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .rounded(theme::ITEM_RADIUS)
+                            .bg(theme::accent_soft())
+                            .child(content),
+                    ),
             );
         } else {
             row = row
@@ -689,9 +703,22 @@ impl Launcher {
                 div()
                     .size_full()
                     .mx(px(6.0))
-                    .rounded(theme::ITEM_RADIUS)
-                    .bg(theme::selected_bg())
-                    .child(content),
+                    .flex()
+                    .child(
+                        div()
+                            .w(px(3.0))
+                            .my(px(4.0))
+                            .rounded_r(px(2.0))
+                            .bg(theme::accent()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .rounded(theme::ITEM_RADIUS)
+                            .bg(theme::accent_soft())
+                            .child(content),
+                    ),
             );
         } else {
             row = row

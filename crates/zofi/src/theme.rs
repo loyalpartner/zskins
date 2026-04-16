@@ -62,6 +62,14 @@ pub fn hover_bg() -> Hsla {
     rgb_alpha(0x363645, 0.5)
 }
 
+// Accent (selected row bar, active tab underline, primary key hint)
+pub fn accent() -> Hsla {
+    rgb(0x4f8cff).into()
+}
+pub fn accent_soft() -> Hsla {
+    rgb_alpha(0x4f8cff, 0.12)
+}
+
 // Preview pane: slightly darker than the panel to suggest a separate surface.
 pub fn preview_bg() -> Hsla {
     rgb(0x1d1d27).into()
