@@ -963,6 +963,35 @@ impl Launcher {
         }
     }
 
+    /// Collect `(prefix_char, short_name)` pairs for rendering as chip
+    /// hints next to the search input. Walks the registry in registration
+    /// order, and for union sources expands out to each child's prefix (so
+    /// e.g. `@ win` and `> apps` both show up even though they're children
+    /// of a single union). Deduped by prefix char; first occurrence wins.
+    fn prefix_hints(&self) -> Vec<(char, String)> {
+        let mut out: Vec<(char, String)> = Vec::new();
+        let mut seen: std::collections::HashSet<char> = std::collections::HashSet::new();
+        for entry in self.registry.entries() {
+            let children = entry.source.sub_sources();
+            if children.is_empty() {
+                if let Some(ch) = entry.source.prefix() {
+                    if seen.insert(ch) {
+                        out.push((ch, shorten_source_name(entry.source.name())));
+                    }
+                }
+            } else {
+                for meta in children {
+                    if let Some(ch) = meta.prefix {
+                        if seen.insert(ch) {
+                            out.push((ch, shorten_source_name(meta.name)));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Icon tint for a slot. UnionAll uses the generic accent; per-source
     /// tabs route through `theme::category()` keyed on the source's name
     /// (or the child's name for UnionChild).
@@ -988,6 +1017,17 @@ fn capitalize(s: &str) -> String {
     match chars.next() {
         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+/// Short label for prefix-hint chips next to the search input. Only
+/// "windows" and "clipboard" need shortening; everything else already
+/// fits in the tight chip layout.
+fn shorten_source_name(name: &str) -> String {
+    match name {
+        "windows" => "win".into(),
+        "clipboard" => "clip".into(),
+        other => other.to_string(),
     }
 }
 
@@ -1090,6 +1130,7 @@ impl Render for Launcher {
 
         let banner = self.source().banner();
         let source_bar = self.render_source_bar(cx);
+        let prefix_hints = self.prefix_hints();
 
         div()
             .key_context("Launcher")
@@ -1126,9 +1167,38 @@ impl Render for Launcher {
                         div()
                             .flex()
                             .items_center()
+                            .gap(px(10.0))
                             .px(theme::PAD_X)
                             .h(px(44.0))
                             .child(div().flex_1().child(self.text_input.clone()))
+                            .child(
+                                // Prefix hint chips: dim pills reminding the
+                                // user which character jumps to which source.
+                                // Hidden when there are no registered prefixes.
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .flex_shrink_0()
+                                    .text_size(theme::FONT_SIZE_SM)
+                                    .text_color(theme::fg_dim())
+                                    .children(prefix_hints.iter().map(|(ch, name)| {
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(3.0))
+                                            .px(px(5.0))
+                                            .py(px(1.0))
+                                            .rounded(px(3.0))
+                                            .bg(theme::kbd_bg())
+                                            .child(
+                                                div()
+                                                    .text_color(theme::fg())
+                                                    .child(ch.to_string()),
+                                            )
+                                            .child(div().child(name.clone()))
+                                    })),
+                            )
                             .child(
                                 div()
                                     .flex_shrink_0()
