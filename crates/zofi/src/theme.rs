@@ -93,3 +93,23 @@ pub fn kind_image_bg() -> Hsla {
 pub fn bar_border() -> Hsla {
     rgb_alpha(0x4e4e60, 0.25)
 }
+
+// Keyboard-hint pills (bottom bar)
+pub fn kbd_bg() -> Hsla {
+    rgb(0x30353f).into()
+}
+pub fn kbd_fg() -> Hsla {
+    rgb(0xaab1bc).into()
+}
+pub fn kbd_border() -> Hsla {
+    rgb_alpha(0x3d4350, 1.0)
+}
+pub fn kbd_accent_bg() -> Hsla {
+    rgb_alpha(0x4f8cff, 0.25)
+}
+pub fn kbd_accent_fg() -> Hsla {
+    rgb(0xe5edff).into()
+}
+pub fn kbd_accent_border() -> Hsla {
+    rgb_alpha(0x4f8cff, 0.45)
+}

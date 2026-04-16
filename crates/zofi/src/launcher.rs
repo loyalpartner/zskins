@@ -1113,16 +1113,17 @@ impl Render for Launcher {
                                             LeftPane::Mimes => "Items",
                                         },
                                         "tab",
+                                        false,
                                     ))
-                                    .child(key_hint("Source", "ctrl-tab"))
+                                    .child(key_hint("Source", "ctrl-tab", false))
                                     .when(self.source().can_peek(), |d| {
-                                        d.child(key_hint("Peek", "space"))
+                                        d.child(key_hint("Peek", "space", false))
                                     })
                                     .when(self.source().can_copy_image(), |d| {
-                                        d.child(key_hint("Copy", "ctrl-c"))
+                                        d.child(key_hint("Copy", "ctrl-c", false))
                                     })
-                                    .child(key_hint("Close", "esc"))
-                                    .child(key_hint("Activate", "enter")),
+                                    .child(key_hint("Close", "esc", false))
+                                    .child(key_hint("Activate", "enter", true)),
                             ),
                     ),
             )
@@ -1185,18 +1186,59 @@ fn img_el_for_peek(image: std::sync::Arc<gpui::Image>) -> AnyElement {
         .into_any_element()
 }
 
-fn key_hint(label: &str, key: &str) -> gpui::Div {
+fn key_hint(label: &str, key: &str, primary: bool) -> gpui::Div {
+    let label_color = if primary {
+        gpui::white()
+    } else {
+        theme::fg_accent()
+    };
+    let label_weight = if primary {
+        FontWeight::BOLD
+    } else {
+        FontWeight::MEDIUM
+    };
+
+    let key_bg = if primary {
+        theme::kbd_accent_bg()
+    } else {
+        theme::kbd_bg()
+    };
+    let key_fg = if primary {
+        theme::kbd_accent_fg()
+    } else {
+        theme::kbd_fg()
+    };
+    let key_border = if primary {
+        theme::kbd_accent_border()
+    } else {
+        theme::kbd_border()
+    };
+
     div()
         .flex()
         .items_center()
         .gap(px(5.0))
         .child(
             div()
-                .text_color(theme::fg_accent())
-                .font_weight(FontWeight::MEDIUM)
+                .text_color(label_color)
+                .font_weight(label_weight)
                 .child(label.to_string()),
         )
-        .child(div().text_color(theme::fg_dim()).child(key.to_string()))
+        .child(
+            // kbd-style pill: subtle border with a thicker bottom edge so it
+            // reads like a physical keycap rather than flat text.
+            div()
+                .px(px(5.0))
+                .py(px(1.0))
+                .rounded(px(3.0))
+                .border_1()
+                .border_b_2()
+                .bg(key_bg)
+                .border_color(key_border)
+                .text_color(key_fg)
+                .text_size(px(10.5))
+                .child(key.to_string()),
+        )
 }
 
 /// Subscribe to a source's growth pulses and re-render on each. Used by
