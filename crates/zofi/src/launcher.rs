@@ -1148,7 +1148,7 @@ fn tab_pill(
     on_click: impl Fn(&mut Launcher, &mut Window, &mut Context<Launcher>) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     let bg = if selected {
-        theme::selected_bg()
+        theme::accent_soft()
     } else {
         gpui::transparent_black()
     };
@@ -1157,12 +1157,21 @@ fn tab_pill(
     } else {
         theme::fg_dim()
     };
+    let border_color = if selected {
+        theme::accent()
+    } else {
+        // Transparent placeholder keeps every tab the same height so the
+        // underline appearing on selection doesn't shift its neighbours.
+        gpui::transparent_black()
+    };
     div()
         .id(id)
         .cursor_pointer()
         .px(px(8.0))
-        .py(px(2.0))
+        .py(px(4.0))
         .rounded(px(4.0))
+        .border_b_2()
+        .border_color(border_color)
         .bg(bg)
         .text_size(px(15.0))
         .text_color(fg)
