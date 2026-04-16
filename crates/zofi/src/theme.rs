@@ -113,3 +113,16 @@ pub fn kbd_accent_fg() -> Hsla {
 pub fn kbd_accent_border() -> Hsla {
     rgb_alpha(0x4f8cff, 0.45)
 }
+
+/// Per-source tint for icons in the source bar and union gutter. Unknown
+/// names fall back to the generic `accent()` so new sources are never
+/// visually broken — just un-tinted until they get a palette entry.
+pub fn category(name: &str) -> Hsla {
+    match name {
+        "windows" => rgb(0x8fb8d6).into(),
+        "apps" => rgb(0xd9b37a).into(),
+        "files" => rgb(0x8fc79a).into(),
+        "clipboard" => rgb(0xb5a3d9).into(),
+        _ => accent(),
+    }
+}

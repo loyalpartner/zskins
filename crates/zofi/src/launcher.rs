@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use gpui::{
     actions, div, img, prelude::*, px, uniform_list, AnyElement, App, Context, Entity, FocusHandle,
-    Focusable, FontWeight, HighlightStyle, KeyBinding, MouseButton, ObjectFit, ScrollStrategy,
-    StyledText, UniformListScrollHandle, Window,
+    Focusable, FontWeight, HighlightStyle, Hsla, KeyBinding, MouseButton, ObjectFit,
+    ScrollStrategy, StyledText, UniformListScrollHandle, Window,
 };
 
 use crate::highlight;
@@ -910,11 +910,13 @@ impl Launcher {
         for (ix, slot) in self.slots.iter().enumerate() {
             let icon = self.slot_icon(*slot);
             let label = self.slot_label(*slot);
+            let tint = self.slot_tint(*slot);
             let selected = ix == self.active_slot;
             let tab = tab_pill(
                 ("bar-slot", ix),
                 icon,
                 label,
+                tint,
                 selected,
                 cx.entity().downgrade(),
                 move |this, window, cx| this.apply_slot(ix, window, cx),
@@ -957,6 +959,23 @@ impl Launcher {
                     .get(j)
                     .map(|m| capitalize(m.name))
                     .unwrap_or_else(|| capitalize(self.registry.get(i).name()))
+            }
+        }
+    }
+
+    /// Icon tint for a slot. UnionAll uses the generic accent; per-source
+    /// tabs route through `theme::category()` keyed on the source's name
+    /// (or the child's name for UnionChild).
+    fn slot_tint(&self, slot: BarSlot) -> Hsla {
+        match slot {
+            BarSlot::UnionAll(_) => theme::accent(),
+            BarSlot::Registry(i) => theme::category(self.registry.get(i).name()),
+            BarSlot::UnionChild(i, j) => {
+                let children = self.registry.get(i).source.sub_sources();
+                children
+                    .get(j)
+                    .map(|m| theme::category(m.name))
+                    .unwrap_or_else(theme::accent)
             }
         }
     }
@@ -1174,6 +1193,7 @@ fn tab_pill(
     id: impl Into<gpui::ElementId>,
     icon: &'static str,
     label: String,
+    tint: Hsla,
     selected: bool,
     entity: gpui::WeakEntity<Launcher>,
     on_click: impl Fn(&mut Launcher, &mut Window, &mut Context<Launcher>) + 'static,
@@ -1210,7 +1230,10 @@ fn tab_pill(
         .flex()
         .items_center()
         .gap(px(6.0))
-        .child(div().text_size(px(15.0)).child(icon))
+        // Tint only the glyph — the label keeps fg/fg_dim so selected state
+        // stays the dominant visual signal. Icon tint is the secondary
+        // "which source family does this tab belong to" cue.
+        .child(div().text_size(px(15.0)).text_color(tint).child(icon))
         .child(div().child(label))
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             if let Some(this) = entity.upgrade() {
