@@ -17,7 +17,7 @@ pub const PREVIEW_IMG_MAX_H: Pixels = px(508.0);
 pub const PANEL_RADIUS: Pixels = px(10.0);
 
 pub const ICON_SIZE: Pixels = px(24.0);
-pub const ITEM_HEIGHT: Pixels = px(38.0);
+pub const ITEM_HEIGHT: Pixels = px(44.0);
 pub const ITEM_RADIUS: Pixels = px(6.0);
 pub const INPUT_HEIGHT: Pixels = px(36.0);
 

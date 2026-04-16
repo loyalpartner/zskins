@@ -507,6 +507,11 @@ impl Source for WindowsSource {
             }
         };
 
+        // Two-line label: title (or app_id fallback) on top, dim app_id
+        // subtitle underneath so the row carries WM-class context without
+        // the user needing to open the preview pane.
+        let subtitle = row.app_id.clone();
+
         div()
             .h_full()
             .px(theme::PAD_X)
@@ -518,21 +523,39 @@ impl Source for WindowsSource {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .text_size(theme::FONT_SIZE)
-                    .font_weight(if selected {
-                        FontWeight::MEDIUM
-                    } else {
-                        FontWeight::NORMAL
-                    })
-                    .text_color(if selected {
-                        theme::fg_accent()
-                    } else {
-                        theme::fg()
-                    })
-                    .child(row.display_label.clone()),
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .gap(gpui::px(1.0))
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_size(theme::FONT_SIZE)
+                            .font_weight(if selected {
+                                FontWeight::MEDIUM
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .text_color(if selected {
+                                theme::fg_accent()
+                            } else {
+                                theme::fg()
+                            })
+                            .child(row.display_label.clone()),
+                    )
+                    .when(!subtitle.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .text_size(theme::FONT_SIZE_SM)
+                                .text_color(theme::fg_dim())
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .child(subtitle),
+                        )
+                    }),
             )
             .into_any_element()
     }
