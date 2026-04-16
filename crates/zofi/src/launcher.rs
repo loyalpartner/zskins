@@ -1080,23 +1080,26 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-/// Tab label: capitalized source name, but trim "clipboard" → "Clip" so
-/// the bottom bar stays compact (matches the mockup).
-fn short_label(name: &str) -> String {
+/// Compact form of a source name. Currently only "clipboard" gets
+/// trimmed — kept as a `match` so adding future abbreviations is a
+/// one-liner. Returns the lowercase short form; capitalisation is the
+/// caller's job (the source bar capitalises, the prefix chip row doesn't).
+fn short_source_name(name: &str) -> &str {
     match name {
-        "clipboard" => "Clip".into(),
-        other => capitalize(other),
+        "clipboard" => "clip",
+        other => other,
     }
 }
 
-/// Short label for prefix-hint chips next to the search input. Keeps
-/// "windows"/"files" full (short enough) and trims "clipboard" to "clip"
-/// so it doesn't dominate the row.
+/// Tab label: capitalised, abbreviated source name (e.g. `clipboard`
+/// → `Clip`). Used by the bottom source bar.
+fn short_label(name: &str) -> String {
+    capitalize(short_source_name(name))
+}
+
+/// Lowercase short label for prefix-hint chips next to the search input.
 fn shorten_source_name(name: &str) -> String {
-    match name {
-        "clipboard" => "clip".into(),
-        other => other.to_string(),
-    }
+    short_source_name(name).to_string()
 }
 
 impl Render for Launcher {
@@ -1268,9 +1271,7 @@ impl Render for Launcher {
                                             .rounded(px(3.0))
                                             .bg(theme::kbd_bg())
                                             .child(
-                                                div()
-                                                    .text_color(theme::fg())
-                                                    .child(ch.to_string()),
+                                                div().text_color(theme::fg()).child(ch.to_string()),
                                             )
                                             .child(div().child(name.clone()))
                                     })),
@@ -1311,17 +1312,17 @@ impl Render for Launcher {
                                             LeftPane::Mimes => "Items",
                                         },
                                         &["tab"],
-                                        false,
+                                        KEY_NORMAL,
                                     ))
-                                    .child(key_hint("Source", &["ctrl", "tab"], false))
+                                    .child(key_hint("Source", &["ctrl", "tab"], KEY_NORMAL))
                                     .when(self.source().can_peek(), |d| {
-                                        d.child(key_hint("Peek", &["space"], false))
+                                        d.child(key_hint("Peek", &["space"], KEY_NORMAL))
                                     })
                                     .when(self.source().can_copy_image(), |d| {
-                                        d.child(key_hint("Copy", &["⌃C"], false))
+                                        d.child(key_hint("Copy", &["⌃C"], KEY_NORMAL))
                                     })
-                                    .child(key_hint("Close", &["esc"], false))
-                                    .child(key_hint("Activate", &["↵"], true)),
+                                    .child(key_hint("Close", &["esc"], KEY_NORMAL))
+                                    .child(key_hint("Activate", &["↵"], KEY_PRIMARY)),
                             ),
                     ),
             )
@@ -1502,6 +1503,12 @@ fn preview_metadata_strip(c: &PreviewChrome) -> gpui::Div {
     row
 }
 
+/// `primary=true` flag for [`key_hint`] — used for the dominant action
+/// (typically `Activate ↵`) so the bottom bar reads with a clear focal
+/// point. Named constants beat bare `true`/`false` at the call sites.
+const KEY_PRIMARY: bool = true;
+const KEY_NORMAL: bool = false;
+
 fn key_hint(label: &str, keys: &[&str], primary: bool) -> gpui::Div {
     let label_color = if primary {
         gpui::white()
@@ -1530,22 +1537,20 @@ fn key_hint(label: &str, keys: &[&str], primary: bool) -> gpui::Div {
         theme::kbd_border()
     };
 
-
-    let mut row = div()
-        .flex()
-        .items_center()
-        .gap(px(6.0))
-        .child(
-            div()
-                .text_color(label_color)
-                .font_weight(label_weight)
-                .child(label.to_string()),
-        );
+    let mut row = div().flex().items_center().gap(px(6.0)).child(
+        div()
+            .text_color(label_color)
+            .font_weight(label_weight)
+            .child(label.to_string()),
+    );
     // Render each key as its own kbd pill so combos read as
     // `ctrl` `tab` rather than one chunky `ctrl-tab` blob — matches
     // the keycap convention from the mockup.
-    let kbd_row = div().flex().items_center().gap(px(2.0)).children(
-        keys.iter().map(|k| {
+    let kbd_row = div()
+        .flex()
+        .items_center()
+        .gap(px(2.0))
+        .children(keys.iter().map(|k| {
             div()
                 .px(px(5.0))
                 .py(px(1.0))
@@ -1562,8 +1567,7 @@ fn key_hint(label: &str, keys: &[&str], primary: bool) -> gpui::Div {
                 .text_size(px(10.5))
                 .font_family("Fira Code")
                 .child(k.to_string())
-        }),
-    );
+        }));
     row = row.child(kbd_row);
     row
 }
@@ -1775,7 +1779,7 @@ mod tests {
         let slots = build_bar_slots(&r);
         let map = build_prefix_map(&r, &slots);
         assert_eq!(map.get(&'/'), Some(&1)); // Registry(1)
-        assert!(map.get(&'>').is_none());
+        assert!(!map.contains_key(&'>'));
     }
 
     #[test]
