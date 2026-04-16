@@ -273,10 +273,12 @@ impl WindowsSource {
             })
             .expect("spawn zofi-windows-capture thread");
 
-        // Best-effort: snapshot the focused window via sway IPC BEFORE the
-        // launcher takes input focus. Failures are silent — non-sway
-        // compositors just lose the "active" pill in the preview header.
-        let pre_focus = zwindows::sway_tree::focused_window().ok().flatten();
+        // Best-effort: snapshot the focused window via the compositor's IPC
+        // BEFORE the launcher takes input focus. The trait dispatches to
+        // sway / Hyprland / noop based on env detection; failures are
+        // silent — unsupported compositors just lose the "active" pill.
+        let ipc = zwindows::compositor::detect();
+        let pre_focus = ipc.focused_window();
         if let Some((ref app, ref title)) = pre_focus {
             tracing::info!("pre-zofi focus: app_id={app:?} title={title:?}");
         }

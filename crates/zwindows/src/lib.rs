@@ -9,6 +9,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 mod client;
+pub mod compositor;
 mod registry;
 pub mod screencopy;
 pub mod sway_tree;
