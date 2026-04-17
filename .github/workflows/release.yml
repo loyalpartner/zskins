@@ -58,8 +58,15 @@ jobs:
           cp ../../LICENSE .
           cp ../../target/release/zofi ./zofi
           cargo aur
+          # cargo-aur derives pkgname from the crate name (zbar-bin), but
+          # the AUR repo is registered as zskins-bin (the project name).
+          # AUR's pre-receive hook rejects any push whose pkgbase doesn't
+          # match the repo name, so rename it here. Tarball filename and
+          # source URL still reference zbar-* — that matches what the
+          # GitHub Release uploads, so leave them alone.
           sed -i \
-            's|install -Dm644 "zofi"|install -Dm755 "zofi"|' \
+            -e 's|^pkgname=zbar-bin$|pkgname=zskins-bin|' \
+            -e 's|install -Dm644 "zofi"|install -Dm755 "zofi"|' \
             "$CARGO_TARGET_DIR/cargo-aur/PKGBUILD"
           rm LICENSE zofi
 
