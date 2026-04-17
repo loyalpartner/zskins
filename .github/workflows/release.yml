@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build & Package
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    permissions:
+      contents: write
+    steps:
+      - name: Install base dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
+            base-devel git rustup cmake clang mold \
+            wayland wayland-protocols \
+            libxkbcommon libxkbcommon-x11 \
+            vulkan-headers vulkan-icd-loader \
+            libxcb xcb-util-cursor \
+            fontconfig freetype2 \
+            mesa gtk4 alsa-lib \
+            openssh openssl
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup default stable
+          rustup show
+          cargo install cargo-aur
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: arch-x86_64-release-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
+          restore-keys: arch-x86_64-release-
+
+      - name: Pre-build zofi
+        run: cargo build --release -p zofi
+
+      - name: Build and package with cargo-aur
+        working-directory: crates/zbar
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: |
+          cp ../../LICENSE .
+          cp ../../target/release/zofi ./zofi
+          cargo aur
+          sed -i \
+            's|install -Dm644 "zofi"|install -Dm755 "zofi"|' \
+            "$CARGO_TARGET_DIR/cargo-aur/PKGBUILD"
+          rm LICENSE zofi
+
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zskins-x86_64
+          path: |
+            target/cargo-aur/zbar-${{ steps.version.outputs.version }}-x86_64.tar.gz
+            target/cargo-aur/PKGBUILD
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zskins-x86_64
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: zbar-*.tar.gz
+
+  aur:
+    name: Publish to AUR
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zskins-x86_64
+
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.2
+        with:
+          pkgname: zskins-bin
+          pkgbuild: ./PKGBUILD
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to ${{ github.ref_name }}"
+          updpkgsums: true

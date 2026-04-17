@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check / Clippy / Fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake pkg-config clang mold \
+            libwayland-dev wayland-protocols \
+            libxkbcommon-dev libxkbcommon-x11-dev \
+            libvulkan-dev \
+            libfontconfig1-dev libfreetype-dev \
+            libx11-xcb-dev libxcb1-dev \
+            libxcb-composite0-dev libxcb-xfixes0-dev \
+            libxcb-xinput-dev libxcb-render0-dev \
+            libxcb-shape0-dev libxcb-dri3-dev \
+            libxcb-present-dev libxcb-sync-dev \
+            libxcb-randr0-dev libxcb-shm0-dev \
+            libxcb-xkb-dev libxcb-dpms0-dev \
+            libxcb-cursor-dev libxcb-icccm4-dev \
+            libxcb-res0-dev \
+            libgtk-4-dev \
+            libasound2-dev \
+            libssl-dev
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Fmt
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy -p zbar -p zofi -p zwindows -- -D warnings
+
+      - name: Test
+        run: cargo test -p zbar -p zofi -p zwindows
+
+      - name: Build
+        run: cargo build --workspace

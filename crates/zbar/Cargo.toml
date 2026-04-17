@@ -1,8 +1,14 @@
 [package]
 name = "zbar"
-version.workspace = true
-edition.workspace = true
-description = "Wayland status bar built on GPUI"
+# NOTE: cargo-aur (0.x) does not understand `version.workspace = true`.
+# Keep these as literal values until cargo-aur gains workspace-inheritance
+# support, then migrate them back to `.workspace = true`.
+version = "0.1.0"
+edition = "2021"
+authors = ["Lee <loyalpartner@163.com>"]
+license = "MIT"
+repository = "https://github.com/loyalpartner/zskins"
+description = "Wayland status bar and launcher built on GPUI"
 
 [dependencies]
 gpui.workspace = true
@@ -24,3 +30,16 @@ futures-lite = "2"
 image = "0.25"
 async-executor = "1"
 icon-theme.workspace = true
+
+[package.metadata.aur]
+depends = ["wayland", "vulkan-icd-loader", "libxkbcommon", "libxcb", "fontconfig", "freetype2", "mesa", "gtk4"]
+optdepends = [
+    "sway: workspace and window management integration",
+    "hyprland: workspace integration",
+    "pipewire-pulse: volume control via pactl",
+]
+files = [
+    # Sibling workspace binary. The release workflow pre-builds zofi
+    # and copies it into this crate's dir so cargo-aur can find it.
+    ["zofi", "/usr/bin/zofi"],
+]
