@@ -200,9 +200,10 @@ fn run_niri_title_session(
             .stderr(Stdio::null())
             .spawn()?,
     );
-    let stdout = child.0.stdout.take().ok_or_else(|| {
-        NiriTitleError::Io(std::io::Error::other("niri msg: stdout not piped"))
-    })?;
+    let stdout =
+        child.0.stdout.take().ok_or_else(|| {
+            NiriTitleError::Io(std::io::Error::other("niri msg: stdout not piped"))
+        })?;
     let reader = BufReader::new(stdout);
 
     let mut tracker = NiriTitleTracker::default();

@@ -140,17 +140,10 @@ impl AppState {
         }
 
         // Sort primarily by output then by name for stable display order.
-        workspaces.sort_by(|a, b| {
-            a.output
-                .cmp(&b.output)
-                .then_with(|| a.name.cmp(&b.name))
-        });
+        workspaces.sort_by(|a, b| a.output.cmp(&b.output).then_with(|| a.name.cmp(&b.name)));
 
         let active = workspaces.iter().find(|w| w.active).map(|w| w.id.clone());
-        let state = WorkspaceState {
-            workspaces,
-            active,
-        };
+        let state = WorkspaceState { workspaces, active };
 
         // Handle map is always refreshed — handles are only compared by
         // identity, so `WorkspaceState` equality doesn't cover them.
@@ -414,12 +407,9 @@ pub fn query_wayland_outputs() -> Vec<(String, f32)> {
         for g in list {
             if g.interface == "wl_output" {
                 let version = g.version.min(4);
-                let _output =
-                    globals
-                        .registry()
-                        .bind::<wl_output::WlOutput, _, OutputProbeState>(
-                            g.name, version, &qh, g.name,
-                        );
+                let _output = globals
+                    .registry()
+                    .bind::<wl_output::WlOutput, _, OutputProbeState>(g.name, version, &qh, g.name);
                 state.entries.push(OutputProbeEntry::new(g.name));
             }
         }
@@ -595,25 +585,20 @@ impl WorkspaceBackend for ExtWorkspaceBackend {
     }
 }
 
-fn bind_all_outputs(
-    globals: &GlobalList,
-    qh: &QueueHandle<AppState>,
-) -> Vec<wl_output::WlOutput> {
-    globals
-        .contents()
-        .with_list(|list| {
-            list.iter()
-                .filter(|g| g.interface == "wl_output")
-                .map(|g| {
-                    // wl_output v4 introduces the `name` event. Bind whatever
-                    // version the compositor advertises, up to v4.
-                    let version = g.version.min(4);
-                    globals
-                        .registry()
-                        .bind::<wl_output::WlOutput, _, AppState>(g.name, version, qh, g.name)
-                })
-                .collect::<Vec<_>>()
-        })
+fn bind_all_outputs(globals: &GlobalList, qh: &QueueHandle<AppState>) -> Vec<wl_output::WlOutput> {
+    globals.contents().with_list(|list| {
+        list.iter()
+            .filter(|g| g.interface == "wl_output")
+            .map(|g| {
+                // wl_output v4 introduces the `name` event. Bind whatever
+                // version the compositor advertises, up to v4.
+                let version = g.version.min(4);
+                globals
+                    .registry()
+                    .bind::<wl_output::WlOutput, _, AppState>(g.name, version, qh, g.name)
+            })
+            .collect::<Vec<_>>()
+    })
 }
 
 fn run_session(shared: Arc<Shared>) -> Result<()> {

@@ -76,8 +76,7 @@ mod tests {
         assert_eq!(a, b, "same name must hash to the same UUID");
         assert_ne!(a, c, "different names must hash to different UUIDs");
         // Hand-computed sanity value for "DP-1" under NAMESPACE_DNS.
-        let expected =
-            uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, b"DP-1");
+        let expected = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, b"DP-1");
         assert_eq!(a, expected);
     }
 }

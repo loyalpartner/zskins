@@ -137,9 +137,7 @@ fn open_bar(
             }),
             ..Default::default()
         },
-        |_, cx| {
-            cx.new(|cx| Bar::new(backend, display_id, output_name, tray, window_title, cx))
-        },
+        |_, cx| cx.new(|cx| Bar::new(backend, display_id, output_name, tray, window_title, cx)),
     );
     if let Err(e) = result {
         tracing::warn!("failed to open zbar window on display {display_id:?}: {e:#}");
