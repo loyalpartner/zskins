@@ -9,14 +9,22 @@ use std::sync::Arc;
 pub struct WorkspacesModule {
     state: WorkspaceState,
     backend: Option<Arc<dyn WorkspaceBackend>>,
+    /// Output name this module renders for (e.g. "DP-1"). `None` means the
+    /// module doesn't know its output and renders all workspaces.
+    output_name: Option<String>,
 }
 
 impl WorkspacesModule {
-    pub fn new(backend: Option<Arc<dyn WorkspaceBackend>>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        backend: Option<Arc<dyn WorkspaceBackend>>,
+        output_name: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let Some(backend) = backend else {
             return WorkspacesModule {
                 state: WorkspaceState::default(),
                 backend: None,
+                output_name,
             };
         };
 
@@ -44,6 +52,7 @@ impl WorkspacesModule {
         WorkspacesModule {
             state: WorkspaceState::default(),
             backend: Some(backend),
+            output_name,
         }
     }
 
@@ -62,7 +71,9 @@ impl WorkspacesModule {
 
     fn activate_optimistic(&mut self, target: &WorkspaceId) {
         for ws in &mut self.state.workspaces {
-            ws.active = ws.id == *target;
+            if self.output_name.is_none() || ws.output.as_deref() == self.output_name.as_deref() {
+                ws.active = ws.id == *target;
+            }
         }
         self.state.active = Some(target.clone());
     }
@@ -71,8 +82,17 @@ impl WorkspacesModule {
 impl Render for WorkspacesModule {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut row = div().flex().items_center().gap_1();
+        let my_output = self.output_name.as_deref();
         for ws in &self.state.workspaces {
+            // Filter to workspaces on this bar's output when known; fall back
+            // to showing every workspace if either side is unknown.
+            if let (Some(my), Some(ws_out)) = (my_output, ws.output.as_deref()) {
+                if my != ws_out {
+                    continue;
+                }
+            }
             let id = ws.id.clone();
+            let output_for_click = ws.output.clone();
             let (bg, hover_bg, text_color, font_weight) = if ws.active {
                 (
                     theme::accent_dim(),
@@ -109,12 +129,16 @@ impl Render for WorkspacesModule {
                 let backend = backend.clone();
                 let entity = cx.entity().clone();
                 pill = pill.on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, _w, cx| {
-                    tracing::debug!("workspace click: {}", id.0);
+                    tracing::debug!(
+                        "workspace click: name={} output={:?}",
+                        id.0,
+                        output_for_click
+                    );
                     entity.update(cx, |m, cx| {
                         m.activate_optimistic(&id);
                         cx.notify();
                     });
-                    backend.activate(&id);
+                    backend.activate(&id, output_for_click.as_deref());
                 });
             }
             row = row.child(pill);

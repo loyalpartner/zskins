@@ -13,6 +13,9 @@ pub struct Workspace {
     pub name: String,
     pub active: bool,
     pub urgent: bool,
+    /// Output (monitor) this workspace belongs to, if known. `None` means
+    /// unknown / global (legacy single-output view).
+    pub output: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -37,6 +40,9 @@ pub trait WorkspaceBackend: Send + Sync + 'static {
     /// through `sink`. Returns a Task that owns the loop's lifetime.
     fn run(&self, sink: EventSink, cx: &mut AsyncApp) -> Task<()>;
 
-    /// Switch to the given workspace. Best-effort; failures logged but not propagated.
-    fn activate(&self, id: &WorkspaceId);
+    /// Switch to the given workspace on the specified output. `output=None`
+    /// falls back to the backend's idea of "current" output (or is simply
+    /// ambiguous on multi-output setups). Best-effort; failures logged but not
+    /// propagated.
+    fn activate(&self, id: &WorkspaceId, output: Option<&str>);
 }

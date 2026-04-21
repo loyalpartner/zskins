@@ -7448,6 +7448,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wayland-client",
  "wayland-protocols",
  "zbus",

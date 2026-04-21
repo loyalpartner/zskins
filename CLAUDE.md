@@ -23,6 +23,7 @@ Wayland status bar built on GPUI (Zed's UI framework). Cargo workspace.
 - Cannot be launched from a headless/SSH shell — GPUI will panic
 - `RUST_LOG=info target/release/zbar` — run with logging
 - `RUST_LOG=debug` for verbose output including workspace click events
+- Live-install iteration loop: `cargo build --release -p zbar && sudo install -m 755 target/release/zbar /usr/bin/zbar && pkill -x zbar; nohup env RUST_LOG=zbar=debug /usr/bin/zbar >/tmp/zbar.log 2>&1 & disown` — then `grep -E "pattern" /tmp/zbar.log` to inspect.
 
 ## Key Patterns
 - Errors: `thiserror` for typed errors (not `anyhow`). Define per-module error enums with `#[derive(thiserror::Error)]`.
@@ -37,6 +38,9 @@ Wayland status bar built on GPUI (Zed's UI framework). Cargo workspace.
 - Wayland protocol objects: always explicitly call `.destroy()` before dropping the connection — proxy `Drop` does NOT send destroy requests; compositor may retain rendering state
 - Wayland capture: `cargo run --example capture -p zwindows` to test per-toplevel capture without starting zofi
 - wayland-protocols crate: ext staging protocols live under `wayland_protocols::ext::` with `staging` feature flag (already enabled in workspace)
+- Multi-bar shared state: resources coordinating with the OS (wayland handles, DBus SNI host) must be single-instance. Pattern: create `Entity<T>` once in `main.rs`, clone into each Bar; or spawn the session via `std::sync::Once` on first `run()` and broadcast events to per-bar sinks (see `ExtWorkspaceBackend`). Per-bar instantiation of these will silently break after the first bar.
+- wayland-client `Dispatch` for any event carrying `new_id` MUST include `event_created_child!` — otherwise runtime panic "Missing event_created_child specialization". Covers ext_workspace_manager_v1, data_device, etc.
+- wayland-client proxies are `Send + Sync`; call request methods from any thread. Don't funnel requests through the event-loop thread via a mutex — `blocking_dispatch` won't wake on the outside change.
 
 ## Gotchas
 - GPUI `.cached()` API requires explicit size styles (e.g. `size_full()`); content-sized views collapse
@@ -47,6 +51,9 @@ Wayland status bar built on GPUI (Zed's UI framework). Cargo workspace.
 - Per-toplevel capture (`ext_image_copy_capture`) with fractional scale (e.g. scale=1.5) causes visible window blur — sway bug, no code workaround; scale=1 works fine
 - `ext_foreign_toplevel_list_v1` does NOT report XWayland windows (WeChat, Feishu); only `zwlr_foreign_toplevel_manager_v1` sees them — handle types are incompatible between the two protocols
 - Per-toplevel capture is sequential (~150ms/window) — budget enough timeout (currently 5s) unlike the old whole-screen screencopy (~100ms total)
+- GPUI `DisplayId` and our backend's `wl_output` are on separate wayland connections — protocol IDs and enumeration order differ. Match by UUID: `display.uuid()` returns `Uuid::new_v5(NAMESPACE_DNS, name.as_bytes())`; compute the same in backend from `wl_output.name` (v4+, bind with `version.min(4)`).
+- niri uses ext-workspace-v1 with per-output groups; workspace `name` is the idx string ("1"…"N"). `$XDG_CURRENT_DESKTOP=niri`. `niri msg --json workspaces` dumps per-output state for debugging.
+- Multi-output ext-workspace: same workspace "name" exists in each group. Key handles by `(name, output)`, not `name` alone, and track `ExtWorkspaceGroupHandleV1::OutputEnter` + `WorkspaceEnter` to assemble the mapping.
 
 ## Worktree & Git
 - Root disk is tight; when running agents in git worktrees share target dir: `export CARGO_TARGET_DIR="$(git rev-parse --show-toplevel)/target"` (run from the main repo, before entering the worktree)

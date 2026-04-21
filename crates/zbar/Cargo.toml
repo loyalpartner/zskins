@@ -30,6 +30,7 @@ futures-lite = "2"
 image = "0.25"
 async-executor = "1"
 icon-theme.workspace = true
+uuid = { version = "1", features = ["v5"] }
 
 [package.metadata.aur]
 depends = ["wayland", "vulkan-icd-loader", "libxkbcommon", "libxcb", "fontconfig", "freetype2", "mesa", "gtk4"]

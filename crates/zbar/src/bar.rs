@@ -9,7 +9,7 @@ use zbar::modules::brightness::BrightnessModule;
 use zbar::modules::clock::ClockModule;
 use zbar::modules::cpu_mem::CpuMemModule;
 use zbar::modules::network::NetworkModule;
-use zbar::modules::tray::TrayModule;
+pub use zbar::modules::tray::TrayModule;
 use zbar::modules::volume::VolumeModule;
 use zbar::modules::window_title::WindowTitleModule;
 use zbar::modules::workspaces::WorkspacesModule;
@@ -31,12 +31,17 @@ impl Bar {
     pub fn new(
         backend: Option<Arc<dyn WorkspaceBackend>>,
         display_id: Option<DisplayId>,
+        output_name: Option<String>,
+        tray: Entity<TrayModule>,
         cx: &mut Context<Self>,
     ) -> Self {
         Bar {
-            workspaces: cx.new(|cx| WorkspacesModule::new(backend, cx)),
+            workspaces: cx.new(|cx| WorkspacesModule::new(backend, output_name, cx)),
             window_title: cx.new(WindowTitleModule::new),
-            tray: cx.new(|cx| TrayModule::new(display_id, cx)),
+            // TrayModule holds a DBus SNI host — only one can run per process,
+            // so the same Entity is shared across all bars. GPUI renders it
+            // correctly in every window, and `cx.notify()` re-renders them all.
+            tray,
             network: cx.new(|cx| NetworkModule::new(display_id, cx)),
             volume: cx.new(VolumeModule::new),
             brightness: cx.new(BrightnessModule::new),

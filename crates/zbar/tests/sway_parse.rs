@@ -15,8 +15,10 @@ fn parses_get_workspaces_into_state() {
             name: "1".to_string(),
             active: true,
             urgent: false,
+            output: Some("eDP-1".to_string()),
         }
     );
     assert_eq!(state.workspaces[2].urgent, true);
     assert_eq!(state.workspaces[2].name, "3:web".to_string());
+    assert_eq!(state.workspaces[2].output.as_deref(), Some("eDP-1"));
 }

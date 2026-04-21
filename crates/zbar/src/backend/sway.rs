@@ -35,6 +35,8 @@ struct RawWorkspace {
     name: String,
     focused: bool,
     urgent: bool,
+    #[serde(default)]
+    output: Option<String>,
 }
 
 pub fn parse_get_workspaces(raw: &str) -> Result<WorkspaceState> {
@@ -52,6 +54,7 @@ pub fn parse_get_workspaces(raw: &str) -> Result<WorkspaceState> {
                 name: r.name,
                 active: r.focused,
                 urgent: r.urgent,
+                output: r.output,
             }
         })
         .collect();
@@ -182,8 +185,14 @@ impl WorkspaceBackend for SwayBackend {
         })
     }
 
-    fn activate(&self, id: &WorkspaceId) {
-        let cmd = format!("workspace {}", id.0);
+    fn activate(&self, id: &WorkspaceId, output: Option<&str>) {
+        // Quote the workspace name so names containing spaces/special chars
+        // survive sway's command parser. Output names are known-safe tokens.
+        let ws_name = sway_quote(&id.0);
+        let cmd = match output {
+            Some(out) => format!("focus output {out}; workspace {ws_name}"),
+            None => format!("workspace {ws_name}"),
+        };
         std::thread::spawn(move || {
             let result = (|| -> Result<()> {
                 let mut conn = SwayConn::connect()?;
@@ -197,6 +206,11 @@ impl WorkspaceBackend for SwayBackend {
             }
         });
     }
+}
+
+fn sway_quote(name: &str) -> String {
+    let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 const EVENT_WINDOW: u32 = 0x80000003;
