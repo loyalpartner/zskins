@@ -646,7 +646,7 @@ impl Launcher {
         self.apply_slot(prev, window, cx);
     }
 
-    fn render_row(&self, list_ix: usize) -> gpui::Stateful<gpui::Div> {
+    fn render_row(&self, list_ix: usize, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let entry_ix = self.filtered[list_ix];
         let sel = list_ix == self.items.selected;
         let content = self.source().render_item(entry_ix, sel);
@@ -691,11 +691,17 @@ impl Launcher {
                 .hover(|s| s.bg(theme::hover_bg()));
         }
 
-        row.id(list_ix)
-            .cursor_pointer()
-            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                cx.dispatch_action(&Confirm);
-            })
+        row.id(list_ix).cursor_pointer().on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, window, cx| {
+                // Click activates the clicked row, not whichever row the
+                // keyboard cursor happens to be on. Force the pane and
+                // selection before dispatching so `confirm` reads them.
+                this.left_pane = LeftPane::Items;
+                this.items.selected = list_ix;
+                this.confirm(&Confirm, window, cx);
+            }),
+        )
     }
 
     fn render_mime_row(
@@ -703,6 +709,7 @@ impl Launcher {
         list_ix: usize,
         mime: &str,
         primary: bool,
+        cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let sel = list_ix == self.mimes.selected;
         let label = if primary {
@@ -757,9 +764,11 @@ impl Launcher {
         }
         row.id(("mime", list_ix)).cursor_pointer().on_mouse_down(
             MouseButton::Left,
-            move |_, _, cx| {
-                cx.dispatch_action(&Confirm);
-            },
+            cx.listener(move |this, _, window, cx| {
+                this.left_pane = LeftPane::Mimes;
+                this.mimes.selected = list_ix;
+                this.confirm(&Confirm, window, cx);
+            }),
         )
     }
 
@@ -1126,8 +1135,8 @@ impl Render for Launcher {
                     uniform_list(
                         "row-list",
                         count,
-                        cx.processor(|this, range: std::ops::Range<usize>, _w, _cx| {
-                            range.map(|ix| this.render_row(ix)).collect::<Vec<_>>()
+                        cx.processor(|this, range: std::ops::Range<usize>, _w, cx| {
+                            range.map(|ix| this.render_row(ix, cx)).collect::<Vec<_>>()
                         }),
                     )
                     .track_scroll(&self.items.scroll)
@@ -1149,12 +1158,12 @@ impl Render for Launcher {
                     uniform_list(
                         "mime-list",
                         self.mime_cache.len(),
-                        cx.processor(|this, range: std::ops::Range<usize>, _w, _cx| {
+                        cx.processor(|this, range: std::ops::Range<usize>, _w, cx| {
                             range
                                 .map(|ix| {
                                     let mime =
                                         this.mime_cache.get(ix).map(String::as_str).unwrap_or("");
-                                    this.render_mime_row(ix, mime, ix == this.primary_mime_ix)
+                                    this.render_mime_row(ix, mime, ix == this.primary_mime_ix, cx)
                                 })
                                 .collect::<Vec<_>>()
                         }),
