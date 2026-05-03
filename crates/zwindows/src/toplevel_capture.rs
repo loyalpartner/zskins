@@ -553,9 +553,7 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, Arc<Mutex<SessionState>>> for State 
                 format: WEnum::Value(fmt),
             } => {
                 // Prefer ARGB/XRGB which we already know how to convert.
-                if st.shm_format.is_none() {
-                    st.shm_format = Some(fmt);
-                }
+                st.shm_format.get_or_insert(fmt);
             }
             ext_image_copy_capture_session_v1::Event::Done => {
                 st.done = true;

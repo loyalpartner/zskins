@@ -581,9 +581,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, Arc<Mutex<FrameState>>> for State {
                 // Pick the first wl_shm format the compositor offers; we only
                 // act on it if buffer_done arrives. Compositors may emit
                 // several Buffer events (one per supported format).
-                if st.params.is_none() {
-                    st.params = Some((fmt, width, height, stride));
-                }
+                st.params.get_or_insert((fmt, width, height, stride));
             }
             zwlr_screencopy_frame_v1::Event::BufferDone => {
                 st.buffer_done = true;

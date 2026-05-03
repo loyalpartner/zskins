@@ -370,32 +370,26 @@ fn parse_link_msg(payload: &[u8]) -> Option<LinkInfo> {
                 let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
                 info.name = String::from_utf8_lossy(&data[..end]).to_string();
             }
-            IFLA_ADDRESS => {
-                if data.len() == 6 {
-                    let mut m = [0u8; 6];
-                    m.copy_from_slice(data);
-                    info.mac = Some(m);
-                }
+            IFLA_ADDRESS if data.len() == 6 => {
+                let mut m = [0u8; 6];
+                m.copy_from_slice(data);
+                info.mac = Some(m);
             }
             IFLA_OPERSTATE => {
                 if let Some(&v) = data.first() {
                     info.operstate = parse_operstate(v);
                 }
             }
-            IFLA_STATS64 => {
-                // struct rtnl_link_stats64 { u64 rx_packets, tx_packets, rx_bytes, tx_bytes, ... }
-                if data.len() >= 32 {
-                    let rx_bytes = u64::from_ne_bytes(data[16..24].try_into().unwrap());
-                    let tx_bytes = u64::from_ne_bytes(data[24..32].try_into().unwrap());
-                    info.rx_bytes = rx_bytes;
-                    info.tx_bytes = tx_bytes;
-                }
+            // struct rtnl_link_stats64 { u64 rx_packets, tx_packets, rx_bytes, tx_bytes, ... }
+            IFLA_STATS64 if data.len() >= 32 => {
+                let rx_bytes = u64::from_ne_bytes(data[16..24].try_into().unwrap());
+                let tx_bytes = u64::from_ne_bytes(data[24..32].try_into().unwrap());
+                info.rx_bytes = rx_bytes;
+                info.tx_bytes = tx_bytes;
             }
-            IFLA_LINKINFO => {
-                // IFLA_INFO_KIND present ⇒ virtual (veth/bridge/vlan/tun/...).
-                if RtaIter::new(data).any(|(nty, _)| nty == IFLA_INFO_KIND) {
-                    info.is_physical = false;
-                }
+            // IFLA_INFO_KIND present ⇒ virtual (veth/bridge/vlan/tun/...).
+            IFLA_LINKINFO if RtaIter::new(data).any(|(nty, _)| nty == IFLA_INFO_KIND) => {
+                info.is_physical = false;
             }
             _ => {}
         }

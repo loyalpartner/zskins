@@ -119,21 +119,13 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopEntry> {
             let key = key.trim();
             let value = value.trim();
             match key {
-                "Name" => {
-                    if name.is_none() {
-                        name = Some(value.to_string());
-                    }
-                }
+                "Name" if name.is_none() => name = Some(value.to_string()),
                 "Exec" => exec = Some(value.to_string()),
                 "Icon" => icon = Some(value.to_string()),
                 "Type" => entry_type = Some(value.to_string()),
                 "NoDisplay" => no_display = value.eq_ignore_ascii_case("true"),
                 "Hidden" => hidden = value.eq_ignore_ascii_case("true"),
-                "StartupWMClass" => {
-                    if !value.is_empty() {
-                        startup_wm_class = Some(value.to_string());
-                    }
-                }
+                "StartupWMClass" if !value.is_empty() => startup_wm_class = Some(value.to_string()),
                 _ => {}
             }
         }
