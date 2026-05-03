@@ -27,7 +27,10 @@ use std::time::Duration;
 
 use gpui::{div, prelude::*, AnyElement, FontWeight, Image, ImageFormat, ObjectFit};
 
-use crate::source::{ActivateOutcome, Layout, Preview, PreviewChrome, PreviewPill, Source};
+use crate::source::{
+    ActivateOutcome, InspectorCard, InspectorRow, Layout, Preview, PreviewChrome, PreviewPill,
+    Source,
+};
 use crate::sources::icon as shared_icon;
 use crate::theme;
 use crate::usage::UsageTracker;
@@ -732,35 +735,67 @@ impl Source for WindowsSource {
         let items = self.items.read().unwrap();
         let row = items.get(ix)?;
         // Prefer the live thumbnail if we managed to capture one. Lookup by
-        // (app_id, title) — same key the capture worker uses. Falling back to
-        // text means the launcher still surfaces *something* useful even when
-        // screencopy isn't available (non-wlroots compositors, capture
-        // timeouts, or windows that opened after the snapshot).
+        // (app_id, title) — same key the capture worker uses.
         let key = (row.app_id.clone(), row.title.clone());
         let hit = self.thumbs.read().unwrap().get(&key).cloned();
         if let Some(img) = hit {
             return Some(Preview::Image(img));
         }
         tracing::info!("preview: thumbnail miss for {key:?}");
-        let mut out = String::new();
-        if !row.title.is_empty() {
-            out.push_str(&row.title);
-            out.push_str("\n\n");
-        }
-        out.push_str("App ID\n");
-        out.push_str(&row.app_id);
-        out.push('\n');
-        out.push_str("\nState\n");
-        out.push_str(if row.activated {
-            "active"
+        // Fallback: an Inspector card. Hits whenever screencopy isn't available
+        // (XWayland clients like WeChat/Feishu, non-wlroots compositors, capture
+        // timeouts, or windows that opened after the snapshot). Hero shows the
+        // app icon + title so the user still gets visual identification, and
+        // the rows expose the values worth copying — app_id for scripting,
+        // workspace for jump-context, hex window ID for compositor IPC.
+        let active_id = self.last_active.load(Ordering::Relaxed);
+        let by_id = active_id == row.id;
+        let by_focus = self
+            .pre_focus
+            .as_ref()
+            .is_some_and(|f| focus_matches(&row.app_id, &row.title, &f.app_id, &f.title));
+        let is_active = by_id || by_focus;
+        let workspace = if is_active {
+            self.pre_focus.as_ref().and_then(|f| f.workspace.clone())
         } else {
-            "background"
+            None
+        };
+
+        let mut rows = vec![
+            InspectorRow {
+                label: "App ID".into(),
+                value: row.app_id.clone(),
+                mono: true,
+            },
+            InspectorRow {
+                label: "Window ID".into(),
+                value: format!("0x{:x}", row.id),
+                mono: true,
+            },
+        ];
+        if let Some(ws) = workspace {
+            rows.push(InspectorRow {
+                label: "Workspace".into(),
+                value: ws,
+                mono: false,
+            });
+        }
+        rows.push(InspectorRow {
+            label: "State".into(),
+            value: if is_active {
+                "Active".into()
+            } else {
+                "Background".into()
+            },
+            mono: false,
         });
-        out.push('\n');
-        out.push_str("\nWindow ID\n");
-        out.push_str(&row.id.to_string());
-        out.push('\n');
-        Some(Preview::Text(out))
+
+        Some(Preview::Inspector(InspectorCard {
+            icon: row.icon_data.clone(),
+            title: row.display_label.clone(),
+            subtitle: Some(if is_active { "Active window" } else { "Window" }.into()),
+            rows,
+        }))
     }
 }
 
@@ -1192,13 +1227,18 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn preview_returns_text_when_no_thumbnail_present() {
+    fn preview_returns_inspector_card_when_no_thumbnail_present() {
         let (src, _) = fixture();
         match src.preview(0) {
-            Some(Preview::Text(t)) => {
-                assert!(t.contains("firefox"), "text preview should mention app_id");
+            Some(Preview::Inspector(card)) => {
+                assert!(
+                    card.rows
+                        .iter()
+                        .any(|r| r.label == "App ID" && r.value == "firefox"),
+                    "inspector card should expose the app_id as a copy row",
+                );
             }
-            _ => panic!("expected textual fallback"),
+            _ => panic!("expected inspector fallback"),
         }
     }
 
@@ -1221,9 +1261,9 @@ mod tests {
     }
 
     #[test]
-    fn preview_falls_back_to_text_when_thumbnail_key_misses() {
+    fn preview_falls_back_to_inspector_when_thumbnail_key_misses() {
         // A thumbnail map that exists but doesn't contain the row's key must
-        // not break preview — we degrade to the text view.
+        // not break preview — we degrade to the inspector card.
         let (src, _) = fixture();
         let mut thumbs = HashMap::new();
         thumbs.insert(
@@ -1231,7 +1271,7 @@ mod tests {
             stub_icon(),
         );
         let src = src.with_thumbnails(thumbs);
-        assert!(matches!(src.preview(0), Some(Preview::Text(_))));
+        assert!(matches!(src.preview(0), Some(Preview::Inspector(_))));
     }
 
     // ------------------------------------------------------------------

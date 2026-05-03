@@ -1548,17 +1548,30 @@ fn render_inspector(card: InspectorCard, cx: &mut Context<Launcher>) -> gpui::Di
         .pb(px(20.0))
         .child(icon_el)
         .child(
+            // Single-line title with ellipsis. Long window titles (e.g.
+            // browser tab names with " — Mozilla Firefox" suffix) would
+            // otherwise wrap and push the rows below the fold.
             div()
+                .max_w_full()
+                .px(px(20.0))
                 .text_color(theme::fg_accent())
                 .text_size(px(20.0))
                 .font_weight(FontWeight::MEDIUM)
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
                 .child(card.title),
         );
     if let Some(sub) = card.subtitle {
         hero = hero.child(
             div()
+                .max_w_full()
+                .px(px(20.0))
                 .text_color(theme::fg_dim())
                 .text_size(px(13.0))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
                 .child(sub),
         );
     }
