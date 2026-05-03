@@ -357,7 +357,12 @@ impl Launcher {
     /// Core slot-switch: updates active source, sub-filter, panes, and
     /// filtered results. Does NOT touch TextInput or call cx.notify() —
     /// callers handle text reset and repaint to avoid observer reentrance.
-    fn switch_to_slot(&mut self, slot_ix: usize, cx: &mut Context<Self>) -> bool {
+    ///
+    /// `current_query` is the text the user has currently typed. Callers pass
+    /// it in because some sites (notably `on_empty_backspace`, which fires
+    /// from inside TextInput's own backspace listener) cannot synchronously
+    /// `read` TextInput without panicking the entity-map borrow check.
+    fn switch_to_slot(&mut self, slot_ix: usize, current_query: &str) -> bool {
         let Some(&slot) = self.slots.get(slot_ix) else {
             return false;
         };
@@ -375,12 +380,8 @@ impl Launcher {
         entry.source.set_sub_filter(new_sub);
         self.sub_sources = entry.source.sub_sources();
 
-        let query = if registry_changed {
-            String::new()
-        } else {
-            self.text_input.read(cx).content().to_string()
-        };
-        self.filtered = entry.source.filter(&query);
+        let query = if registry_changed { "" } else { current_query };
+        self.filtered = entry.source.filter(query);
         self.items.reset();
         self.mimes.reset();
         self.left_pane = LeftPane::Items;
@@ -415,7 +416,8 @@ impl Launcher {
     /// Full slot activation with focus restore. Used by bar tab clicks and
     /// Ctrl+Tab cycling where GPUI mouse handling may steal focus.
     fn apply_slot(&mut self, slot_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.switch_to_slot(slot_ix, cx) {
+        let current_query = self.text_input.read(cx).content().to_string();
+        if self.switch_to_slot(slot_ix, &current_query) {
             self.finish_slot_switch(cx);
             let handle = self.text_input.focus_handle(cx);
             cx.defer_in(window, move |_, window, cx| {
@@ -445,7 +447,7 @@ impl Launcher {
         if let Some(ch) = query.chars().next() {
             if query.len() == ch.len_utf8() {
                 if let Some(&slot_ix) = self.prefix_map.get(&ch) {
-                    if self.switch_to_slot(slot_ix, cx) {
+                    if self.switch_to_slot(slot_ix, query) {
                         self.finish_slot_switch(cx);
                     }
                     return;
@@ -456,12 +458,14 @@ impl Launcher {
         cx.notify();
     }
 
-    /// Called when backspace is pressed on an empty input.
+    /// Called when backspace is pressed on an empty input. Invoked from
+    /// inside TextInput's backspace listener — TextInput is currently being
+    /// updated, so we MUST NOT `read` it here. Empty by definition.
     fn on_empty_backspace(&mut self, cx: &mut Context<Self>) {
         if self.active_slot == self.default_slot {
             return;
         }
-        if self.switch_to_slot(self.default_slot, cx) {
+        if self.switch_to_slot(self.default_slot, "") {
             self.finish_slot_switch(cx);
         }
     }
