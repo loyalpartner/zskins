@@ -1,3 +1,8 @@
+// Currently unregistered (see crates/zofi/src/main.rs `build_registry`).
+// Module is kept compilable so it can be re-enabled by adding it back to
+// the registry — silence dead-code lints meanwhile.
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};

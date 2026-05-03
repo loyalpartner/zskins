@@ -22,8 +22,7 @@ use gpui_platform::application;
 use crate::registry::{SourceEntry, SourceRegistry};
 use crate::source::Source;
 use crate::sources::{
-    apps::AppsSource, clipboard::ClipboardSource, files::FilesSource, union::UnionSource,
-    windows::WindowsSource,
+    apps::AppsSource, clipboard::ClipboardSource, union::UnionSource, windows::WindowsSource,
 };
 use crate::usage::UsageTracker;
 
@@ -104,9 +103,9 @@ fn main() -> anyhow::Result<()> {
 /// Compose the source list. When the compositor exposes
 /// `wlr-foreign-toplevel-management-v1` the default tab merges windows +
 /// apps — that's what "launch or jump" means in practice, and the two
-/// naturally share ranking. Files and clipboard stay as their own tabs
-/// because their queries are structurally different (path autocompletion,
-/// history recall) and mixing them dilutes the launch view.
+/// naturally share ranking. Clipboard stays as its own tab because its
+/// queries are structurally different (history recall) and mixing it
+/// dilutes the launch view.
 fn build_registry() -> SourceRegistry {
     let t0 = std::time::Instant::now();
     // Tracker is shared across sources (apps + windows write & read from the
@@ -156,16 +155,12 @@ fn build_registry() -> SourceRegistry {
                     .with_placeholder("Search windows and apps...")
                     .with_empty_text("No matches"),
             );
-            let t_files = std::time::Instant::now();
-            let files = FilesSource::load();
-            tracing::info!("startup: FilesSource::load = {:?}", t_files.elapsed());
             let t_clip = std::time::Instant::now();
             let clip = ClipboardSource::load();
             tracing::info!("startup: ClipboardSource::load = {:?}", t_clip.elapsed());
             tracing::info!("startup: TOTAL = {:?}", t0.elapsed());
             SourceRegistry::new(vec![
                 SourceEntry::from_source(union),
-                SourceEntry::from_source(Box::new(files)),
                 SourceEntry::from_source(Box::new(clip)),
             ])
             .with_tracker(tracker)
@@ -177,7 +172,6 @@ fn build_registry() -> SourceRegistry {
             SourceRegistry::new(vec![
                 SourceEntry::from_source(Box::new(AppsSource::load(tracker.clone()))),
                 SourceEntry::from_source(Box::new(ClipboardSource::load())),
-                SourceEntry::from_source(Box::new(FilesSource::load())),
             ])
             .with_tracker(tracker)
         }
