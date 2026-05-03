@@ -12,6 +12,26 @@ pub enum Preview {
         lang: String,
     },
     Image(Arc<Image>),
+    /// Inspector card: a hero block (icon + title + subtitle) above a list
+    /// of click-to-copy rows. Sources just supply the data; the launcher
+    /// owns clipboard + toast wiring (it's the only layer with
+    /// `Context<Launcher>` and the toast field). When this variant is
+    /// returned, `preview_chrome` is ignored — the card has its own header.
+    Inspector(InspectorCard),
+}
+
+pub struct InspectorCard {
+    pub icon: Option<Arc<Image>>,
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub rows: Vec<InspectorRow>,
+}
+
+pub struct InspectorRow {
+    pub label: String,
+    pub value: String,
+    /// Hint to render the value in monospace (paths, identifiers).
+    pub mono: bool,
 }
 
 /// What the launcher does after `activate` / `activate_with_mime` returns.

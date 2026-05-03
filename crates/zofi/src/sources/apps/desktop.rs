@@ -18,6 +18,10 @@ pub struct DesktopEntry {
     /// `WindowsSource` to match Wayland `app_id`s back to the entry whose icon
     /// we've already loaded.
     pub file_stem: String,
+    /// Absolute path on disk, e.g. `/usr/share/applications/firefox.desktop`.
+    /// Empty `PathBuf` when not known (test fixtures). Populated by
+    /// `load_entries`; `parse_desktop_file` doesn't see the path.
+    pub desktop_path: PathBuf,
     /// `StartupWMClass=` value — the most reliable link between an X11/XWayland
     /// app's window class and its `.desktop` entry.
     pub startup_wm_class: Option<String>,
@@ -55,6 +59,7 @@ pub fn load_entries() -> Vec<DesktopEntry> {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
+            de.desktop_path = path.clone();
             let key = path
                 .file_name()
                 .unwrap_or_default()
@@ -149,6 +154,7 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopEntry> {
         icon_data: None,
         search_key,
         file_stem: String::new(),
+        desktop_path: PathBuf::new(),
         startup_wm_class,
     })
 }

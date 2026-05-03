@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 
 use gpui::{
-    actions, div, img, prelude::*, px, uniform_list, AnyElement, App, Context, Entity, FocusHandle,
-    Focusable, FontWeight, HighlightStyle, Hsla, KeyBinding, MouseButton, ObjectFit,
-    ScrollStrategy, StyledText, UniformListScrollHandle, Window,
+    actions, div, img, prelude::*, px, uniform_list, AnyElement, App, ClipboardItem, Context,
+    Entity, FocusHandle, Focusable, FontWeight, HighlightStyle, Hsla, KeyBinding, MouseButton,
+    ObjectFit, ScrollStrategy, StyledText, UniformListScrollHandle, Window,
 };
 
 use crate::highlight;
 use crate::input::TextInput;
 use crate::registry::SourceRegistry;
 use crate::source::{
-    ActivateOutcome, Layout, Preview, PreviewChrome, PreviewPill, Source, SourceMeta,
+    ActivateOutcome, InspectorCard, Layout, Preview, PreviewChrome, PreviewPill, Source, SourceMeta,
 };
 use crate::theme;
 
@@ -772,17 +772,10 @@ impl Launcher {
         )
     }
 
-    fn render_preview_pane(&self) -> AnyElement {
+    fn render_preview_pane(&self, cx: &mut Context<Self>) -> AnyElement {
         let item_ix = match self.filtered.get(self.items.selected) {
             Some(&i) => i,
             None => return div().size_full().bg(theme::preview_bg()).into_any_element(),
-        };
-        // Header/metadata chrome is an opt-in per source. Mime view suppresses
-        // it: the right pane is showing a mime variant, not the item itself,
-        // so the item-level title/metadata would be misleading.
-        let chrome = match self.left_pane {
-            LeftPane::Items => self.source().preview_chrome(item_ix),
-            LeftPane::Mimes => None,
         };
         let preview = match self.left_pane {
             LeftPane::Items => self.source().preview(item_ix),
@@ -790,6 +783,15 @@ impl Launcher {
                 Some(m) => self.source().preview_for_mime(item_ix, m),
                 None => self.source().preview(item_ix),
             },
+        };
+        // Header/metadata chrome is an opt-in per source. Mime view suppresses
+        // it: the right pane is showing a mime variant, not the item itself,
+        // so the item-level title/metadata would be misleading. The Inspector
+        // variant carries its own header, so we suppress the strip there too.
+        let chrome = match (&self.left_pane, &preview) {
+            (LeftPane::Items, Some(Preview::Inspector(_))) => None,
+            (LeftPane::Items, _) => self.source().preview_chrome(item_ix),
+            (LeftPane::Mimes, _) => None,
         };
 
         let body_container = div().flex_1().min_h_0().overflow_hidden();
@@ -869,6 +871,11 @@ impl Launcher {
                                 .object_fit(ObjectFit::Contain),
                         ),
                 )
+                .into_any_element(),
+            Some(Preview::Inspector(card)) => body_container
+                .id("preview-inspector")
+                .overflow_y_scroll()
+                .child(render_inspector(card, cx))
                 .into_any_element(),
             None => body_container
                 .flex()
@@ -1207,7 +1214,7 @@ impl Render for Launcher {
                     div()
                         .w(theme::SPLIT_PREVIEW_W)
                         .h_full()
-                        .child(self.render_preview_pane()),
+                        .child(self.render_preview_pane(cx)),
                 )
                 .into_any_element(),
         };
@@ -1494,6 +1501,128 @@ fn render_pill(p: &PreviewPill) -> gpui::Div {
 /// Bottom metadata strip: `(label, value)` pairs in a dim monospaced row.
 /// Caller is responsible for skipping this when `metadata` is empty —
 /// rendering an empty border would just leave a visual hairline.
+/// Render an [`InspectorCard`] body — hero block (icon + title + subtitle)
+/// followed by a stack of click-to-copy rows. Each row writes its `value` to
+/// the system clipboard and pops a transient toast on the launcher.
+fn render_inspector(card: InspectorCard, cx: &mut Context<Launcher>) -> gpui::Div {
+    let icon_el: AnyElement = match card.icon {
+        Some(image) => div()
+            .size(px(96.0))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(img(image).size(px(96.0)).object_fit(ObjectFit::Contain))
+            .into_any_element(),
+        None => div()
+            .size(px(96.0))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(theme::fg_dim())
+            .text_size(px(40.0))
+            .child("\u{25cb}")
+            .into_any_element(),
+    };
+
+    let mut hero = div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(8.0))
+        .pt(px(28.0))
+        .pb(px(20.0))
+        .child(icon_el)
+        .child(
+            div()
+                .text_color(theme::fg_accent())
+                .text_size(px(20.0))
+                .font_weight(FontWeight::MEDIUM)
+                .child(card.title),
+        );
+    if let Some(sub) = card.subtitle {
+        hero = hero.child(
+            div()
+                .text_color(theme::fg_dim())
+                .text_size(px(13.0))
+                .child(sub),
+        );
+    }
+
+    let mut rows_col = div()
+        .flex()
+        .flex_col()
+        .px(px(12.0))
+        .pb(px(20.0))
+        .border_t_1()
+        .border_color(theme::panel_border())
+        .pt(px(10.0));
+    for (i, row) in card.rows.into_iter().enumerate() {
+        let value_for_copy = row.value.clone();
+        let value_display = row.value.clone();
+        let label_for_toast = row.label.clone();
+        let label_display = row.label.clone();
+        let value_color = theme::fg();
+        let value_div = if row.mono {
+            div().font_family("monospace").text_color(value_color)
+        } else {
+            div().text_color(value_color)
+        };
+        rows_col = rows_col.child(
+            div()
+                .id(("inspector-row", i))
+                .flex()
+                .items_center()
+                .gap(px(12.0))
+                .px(px(10.0))
+                .py(px(7.0))
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::hover_bg()))
+                .child(
+                    div()
+                        .w(px(110.0))
+                        .flex_shrink_0()
+                        .text_color(theme::fg_dim())
+                        .text_size(px(12.0))
+                        .child(label_display),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_size(px(12.0))
+                        .child(value_div.child(value_display)),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(theme::fg_dim())
+                        .text_size(px(12.0))
+                        .child("\u{29c9}"),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(value_for_copy.clone()));
+                        this.toast = Some(format!("Copied {label_for_toast}"));
+                        cx.notify();
+                    }),
+                ),
+        );
+    }
+
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .child(hero)
+        .child(rows_col)
+}
+
 fn preview_metadata_strip(c: &PreviewChrome) -> gpui::Div {
     let mut row = div()
         .flex()

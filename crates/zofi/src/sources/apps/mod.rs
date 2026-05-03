@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use gpui::{div, img, prelude::*, AnyElement, FontWeight, ObjectFit};
 
-use crate::source::{ActivateOutcome, Layout, Preview, PreviewChrome, Source};
+use crate::source::{ActivateOutcome, InspectorCard, InspectorRow, Layout, Preview, Source};
 use crate::theme;
 use crate::usage::UsageTracker;
 
@@ -149,46 +149,51 @@ impl Source for AppsSource {
         Layout::ListAndPreview
     }
 
-    fn preview_chrome(&self, ix: usize) -> Option<PreviewChrome> {
-        let entry = self.entries.get(ix)?;
-        let mut metadata: Vec<(String, String)> = Vec::new();
-        if !entry.file_stem.is_empty() {
-            metadata.push(("File".into(), entry.file_stem.clone()));
-        }
-        if let Some(ref cls) = entry.startup_wm_class {
-            metadata.push(("Class".into(), cls.clone()));
-        }
-        Some(PreviewChrome {
-            title: entry.name.to_string(),
-            pills: Vec::new(),
-            metadata,
-        })
-    }
+    // No `preview_chrome`: `Preview::Inspector` carries its own header,
+    // and the launcher suppresses the chrome strip for that variant.
 
     fn preview(&self, ix: usize) -> Option<Preview> {
         let entry = self.entries.get(ix)?;
-        let mut out = String::new();
-        out.push_str(&entry.name);
-        out.push_str("\n\n");
-        out.push_str("Exec\n");
-        out.push_str(entry.exec.trim());
-        out.push('\n');
-        if let Some(ref icon) = entry.icon_name {
-            out.push_str("\nIcon\n");
-            out.push_str(icon);
-            out.push('\n');
+        let mut rows = Vec::new();
+        if let Some(ref name) = entry.icon_name {
+            rows.push(InspectorRow {
+                label: "Icon name".into(),
+                value: name.clone(),
+                mono: true,
+            });
         }
-        if !entry.file_stem.is_empty() {
-            out.push_str("\nDesktop ID\n");
-            out.push_str(&entry.file_stem);
-            out.push('\n');
+        if let Some(ref path) = entry.icon_path {
+            rows.push(InspectorRow {
+                label: "Icon path".into(),
+                value: path.to_string_lossy().into_owned(),
+                mono: true,
+            });
         }
+        if !entry.desktop_path.as_os_str().is_empty() {
+            rows.push(InspectorRow {
+                label: "Desktop file".into(),
+                value: entry.desktop_path.to_string_lossy().into_owned(),
+                mono: true,
+            });
+        }
+        rows.push(InspectorRow {
+            label: "Exec".into(),
+            value: entry.exec.clone(),
+            mono: true,
+        });
         if let Some(ref wm) = entry.startup_wm_class {
-            out.push_str("\nStartupWMClass\n");
-            out.push_str(wm);
-            out.push('\n');
+            rows.push(InspectorRow {
+                label: "WM Class".into(),
+                value: wm.clone(),
+                mono: true,
+            });
         }
-        Some(Preview::Text(out))
+        Some(Preview::Inspector(InspectorCard {
+            icon: entry.icon_data.clone(),
+            title: entry.name.to_string(),
+            subtitle: Some("Application".into()),
+            rows,
+        }))
     }
 }
 
@@ -249,6 +254,7 @@ mod tests {
             icon_data: None,
             search_key: name.to_lowercase(),
             file_stem: stem.to_string(),
+            desktop_path: std::path::PathBuf::new(),
             startup_wm_class: None,
         }
     }

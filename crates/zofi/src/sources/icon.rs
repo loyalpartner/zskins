@@ -260,6 +260,7 @@ mod tests {
             icon_data: if with_icon { Some(stub_icon()) } else { None },
             search_key: name.to_lowercase(),
             file_stem: file_stem.to_string(),
+            desktop_path: std::path::PathBuf::new(),
             startup_wm_class: wm_class.map(str::to_string),
         }
     }
