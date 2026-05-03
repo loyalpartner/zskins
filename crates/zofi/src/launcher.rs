@@ -1222,6 +1222,18 @@ impl Render for Launcher {
         let banner = self.source().banner();
         let source_bar = self.render_source_bar(cx);
         let prefix_hints = self.prefix_hints();
+        // Toast bar: thin flash strip below the input separator. Cleared on
+        // any arrow / confirm / dismiss / source switch (existing convention)
+        // — no timer; the next user action wipes it.
+        let toast_bar = self.toast.as_ref().map(|t| {
+            div()
+                .px(px(14.0))
+                .py(px(6.0))
+                .bg(theme::pill_active_bg())
+                .text_color(theme::pill_active_fg())
+                .text_size(theme::FONT_SIZE_SM)
+                .child(t.clone())
+        });
 
         div()
             .key_context("Launcher")
@@ -1306,6 +1318,7 @@ impl Render for Launcher {
                             ),
                     )
                     .child(div().h(px(1.0)).bg(theme::bar_border()))
+                    .children(toast_bar)
                     .children(banner)
                     .child(body)
                     .child(
@@ -1601,7 +1614,7 @@ fn render_inspector(card: InspectorCard, cx: &mut Context<Launcher>) -> gpui::Di
                     div()
                         .flex_shrink_0()
                         .text_color(theme::fg_dim())
-                        .text_size(px(12.0))
+                        .text_size(px(18.0))
                         .child("\u{29c9}"),
                 )
                 .on_mouse_down(
