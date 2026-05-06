@@ -5,6 +5,7 @@ use gpui::{
     Render, Styled, Window,
 };
 use std::sync::Arc;
+use ztheme::Theme;
 
 pub struct WorkspacesModule {
     state: WorkspaceState,
@@ -83,6 +84,7 @@ impl Render for WorkspacesModule {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut row = div().flex().items_center().gap_1();
         let my_output = self.output_name.as_deref();
+        let t = *cx.global::<Theme>();
         for ws in &self.state.workspaces {
             // Filter to workspaces on this bar's output when known; fall back
             // to showing every workspace if either side is unknown.
@@ -95,23 +97,23 @@ impl Render for WorkspacesModule {
             let output_for_click = ws.output.clone();
             let (bg, hover_bg, text_color, font_weight) = if ws.active {
                 (
-                    theme::accent_dim(),
-                    theme::accent_dim_hover(),
-                    theme::accent(),
+                    t.accent_soft,
+                    theme::accent_dim_hover(&t),
+                    t.accent,
                     gpui::FontWeight::SEMIBOLD,
                 )
             } else if ws.urgent {
                 (
-                    theme::surface(),
-                    theme::surface_hover(),
-                    theme::urgent(),
+                    t.surface,
+                    t.surface_hover,
+                    t.urgent,
                     gpui::FontWeight::MEDIUM,
                 )
             } else {
                 (
                     gpui::Hsla::transparent_black(),
-                    theme::surface_hover(),
-                    theme::fg_dim(),
+                    t.surface_hover,
+                    t.fg_dim,
                     gpui::FontWeight::NORMAL,
                 )
             };

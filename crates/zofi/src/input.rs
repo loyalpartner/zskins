@@ -571,10 +571,11 @@ impl Element for TextElement {
         let cursor = input.cursor_offset();
         let style = window.text_style();
 
+        let theme_global = cx.global::<ztheme::Theme>();
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), theme::fg_dim())
+            (input.placeholder.clone(), theme_global.fg_dim)
         } else {
-            (content, theme::fg())
+            (content, theme_global.fg)
         };
 
         let run = TextRun {
@@ -624,12 +625,13 @@ impl Element for TextElement {
                 Some({
                     let line_h = font_size + px(4.);
                     let y_center = (bounds.top() + bounds.bottom()) / 2.;
+                    let cursor_color = cx.global::<ztheme::Theme>().fg_accent;
                     fill(
                         Bounds::new(
                             point(bounds.left() + cursor_pos, y_center - line_h / 2.),
                             size(px(1.5), line_h),
                         ),
-                        theme::fg_accent(),
+                        cursor_color,
                     )
                 }),
             )
@@ -702,6 +704,7 @@ impl Element for TextElement {
 
 impl Render for TextInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme_global = *cx.global::<ztheme::Theme>();
         div()
             .flex()
             .items_center()
@@ -732,7 +735,7 @@ impl Render for TextInput {
             .h(theme::INPUT_HEIGHT)
             .px(theme::PAD_X)
             .bg(gpui::Hsla::transparent_black())
-            .text_color(theme::fg())
+            .text_color(theme_global.fg)
             .text_size(theme::FONT_SIZE)
             .line_height(theme::INPUT_HEIGHT)
             .child(TextElement { input: cx.entity() })

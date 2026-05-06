@@ -1,4 +1,13 @@
-use gpui::{div, px, rgb, Div, Hsla, InteractiveElement, ParentElement, Pixels, Styled};
+//! Layout constants and small render helpers for the bar.
+//!
+//! Color tokens have moved to the workspace-shared [`ztheme`] crate. Read
+//! them via `cx.global::<ztheme::Theme>()` at render time. The dimensions
+//! and a pair of helpers (pill, pct_label, threshold_color) live here
+//! because they're zbar-specific layout, not part of the cross-crate
+//! palette contract.
+
+use gpui::{div, px, App, Div, Hsla, InteractiveElement, ParentElement, Pixels, Styled};
+use ztheme::Theme;
 
 pub const BAR_HEIGHT: Pixels = px(34.0);
 pub const FONT_SIZE: Pixels = px(12.5);
@@ -8,61 +17,31 @@ pub const PILL_PX: Pixels = px(8.0);
 pub const PILL_PY: Pixels = px(3.0);
 const PCT_WIDTH: Pixels = px(32.0);
 
-fn with_alpha(hex: u32, a: f32) -> Hsla {
-    let mut c: Hsla = rgb(hex).into();
-    c.a = a;
+/// Hover-bg for a workspace pill in the active state. The shared `Theme`
+/// only carries one accent_soft slot; we want the workspace pill's hover
+/// to bump the alpha a notch above the idle state. Derived rather than
+/// hand-coded so the hue stays perfectly in sync with the active palette.
+pub fn accent_dim_hover(t: &Theme) -> Hsla {
+    let mut c = t.accent_soft;
+    c.a = (c.a + 0.10).min(1.0);
     c
 }
 
-pub fn bg() -> Hsla {
-    with_alpha(0x1e1e2e, 0.7)
-}
-pub fn fg() -> Hsla {
-    rgb(0xcdd6f4).into()
-}
-pub fn fg_dim() -> Hsla {
-    rgb(0xa6adc8).into()
-}
-pub fn accent() -> Hsla {
-    rgb(0x89b4fa).into()
-}
-pub fn accent_dim() -> Hsla {
-    with_alpha(0x89b4fa, 0.15)
-}
-pub fn accent_dim_hover() -> Hsla {
-    with_alpha(0x89b4fa, 0.25)
-}
-pub fn surface() -> Hsla {
-    with_alpha(0x313244, 0.5)
-}
-pub fn surface_hover() -> Hsla {
-    with_alpha(0x45475a, 0.6)
-}
-pub fn urgent() -> Hsla {
-    rgb(0xf38ba8).into()
-}
-pub fn warning() -> Hsla {
-    rgb(0xfab387).into()
-}
-pub fn green() -> Hsla {
-    rgb(0xa6e3a1).into()
-}
-pub fn border() -> Hsla {
-    with_alpha(0x6c7086, 0.2)
-}
-pub fn separator() -> Hsla {
-    with_alpha(0x6c7086, 0.15)
-}
-
-pub fn pill() -> Div {
+/// Standard pill chrome used by every status module (clock, volume,
+/// brightness, battery, etc.). Pulls colors off the global theme so the
+/// pill restyles itself when the user swaps palettes.
+pub fn pill(cx: &App) -> Div {
+    let t = cx.global::<Theme>();
     div()
         .px(PILL_PX)
         .py(PILL_PY)
         .rounded_md()
-        .bg(surface())
-        .hover(|s| s.bg(surface_hover()))
+        .bg(t.surface)
+        .hover(move |s| s.bg(t.surface_hover))
 }
 
+/// Right-aligned percentage label (`"  9%"`, `" 87%"`). Width is fixed so
+/// the surrounding pill doesn't jitter as the integer width changes.
 pub fn pct_label(value: impl std::fmt::Display, color: Hsla) -> Div {
     div()
         .min_w(PCT_WIDTH)
@@ -70,12 +49,16 @@ pub fn pct_label(value: impl std::fmt::Display, color: Hsla) -> Div {
         .child(format!("{value:>3}%"))
 }
 
-pub fn threshold_color(pct: f32, warn_at: f32, urgent_at: f32) -> Hsla {
+/// Map a percentage to a semantic color via two thresholds: anything at
+/// or above `urgent_at` paints urgent, between `warn_at..urgent_at` paints
+/// warning, and below `warn_at` falls back to dim foreground.
+pub fn threshold_color(cx: &App, pct: f32, warn_at: f32, urgent_at: f32) -> Hsla {
+    let t = cx.global::<Theme>();
     if pct >= urgent_at {
-        urgent()
+        t.urgent
     } else if pct >= warn_at {
-        warning()
+        t.warning
     } else {
-        fg_dim()
+        t.fg_dim
     }
 }

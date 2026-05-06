@@ -28,6 +28,7 @@ unicode-segmentation = "1"
 rayon = "1"
 icon-theme = { path = "crates/icon-theme" }
 zwindows = { path = "crates/zwindows" }
+ztheme = { path = "crates/ztheme" }
 walkdir = "2"
 nucleo-matcher = "0.3"
 include_dir = "0.7"

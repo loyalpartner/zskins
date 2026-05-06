@@ -1,0 +1,16 @@
+[package]
+name = "ztheme"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gpui.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+toml = "0.8"
+notify = "6"
+dirs = "5"
+
+[dev-dependencies]
+tempfile = "3"

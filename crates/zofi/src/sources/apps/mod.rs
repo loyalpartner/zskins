@@ -79,7 +79,7 @@ impl Source for AppsSource {
         crate::fuzzy::match_indices(query, &haystacks)
     }
 
-    fn render_item(&self, ix: usize, selected: bool) -> AnyElement {
+    fn render_item(&self, ix: usize, selected: bool, theme_global: &ztheme::Theme) -> AnyElement {
         let entry = &self.entries[ix];
         // file_stem matches the WM class window managers report, so it makes
         // a more useful secondary line than the GTK icon name.
@@ -90,7 +90,7 @@ impl Source for AppsSource {
             .flex()
             .items_center()
             .gap(theme::GAP)
-            .child(render_icon(entry))
+            .child(render_icon(entry, theme_global))
             .child(
                 div()
                     .flex_1()
@@ -110,14 +110,18 @@ impl Source for AppsSource {
                             } else {
                                 FontWeight::NORMAL
                             })
-                            .text_color(if selected { gpui::white() } else { theme::fg() })
+                            .text_color(if selected {
+                                gpui::white()
+                            } else {
+                                theme_global.fg
+                            })
                             .child(entry.name.clone()),
                     )
                     .when(!subtitle.is_empty(), |d| {
                         d.child(
                             div()
                                 .text_size(theme::FONT_SIZE_SM)
-                                .text_color(theme::fg_dim())
+                                .text_color(theme_global.fg_dim)
                                 .overflow_hidden()
                                 .whitespace_nowrap()
                                 .text_ellipsis()
@@ -203,7 +207,7 @@ impl Source for AppsSource {
     }
 }
 
-fn render_icon(entry: &DesktopEntry) -> gpui::Div {
+fn render_icon(entry: &DesktopEntry, theme_global: &ztheme::Theme) -> gpui::Div {
     if let Some(ref data) = entry.icon_data {
         div().size(theme::ICON_SIZE).flex_shrink_0().child(
             img(data.clone())
@@ -223,7 +227,7 @@ fn render_icon(entry: &DesktopEntry) -> gpui::Div {
             .flex()
             .items_center()
             .justify_center()
-            .text_color(theme::fg_dim())
+            .text_color(theme_global.fg_dim)
             .text_size(theme::FONT_SIZE_SM)
             .child("\u{25cb}")
     }

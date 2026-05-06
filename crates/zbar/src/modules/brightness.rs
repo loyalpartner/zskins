@@ -2,6 +2,7 @@ use crate::theme;
 use gpui::{div, Context, IntoElement, ParentElement, Render, Styled, Window};
 use std::fs;
 use std::time::Duration;
+use ztheme::Theme;
 
 pub struct BrightnessModule {
     percent: Option<u32>,
@@ -71,7 +72,7 @@ fn read_brightness(device: Option<&str>, max: u32) -> Option<u32> {
 }
 
 impl Render for BrightnessModule {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(pct) = self.percent else {
             return div();
         };
@@ -80,12 +81,13 @@ impl Render for BrightnessModule {
             31..=70 => "󰃟",
             _ => "󰃠",
         };
-        theme::pill()
+        let t = cx.global::<Theme>();
+        theme::pill(cx)
             .bg(gpui::Hsla::transparent_black())
             .flex()
             .items_center()
             .gap_0p5()
-            .child(div().text_color(theme::accent()).child(icon.to_string()))
-            .child(theme::pct_label(pct, theme::fg_dim()))
+            .child(div().text_color(t.accent).child(icon.to_string()))
+            .child(theme::pct_label(pct, t.fg_dim))
     }
 }

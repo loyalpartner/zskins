@@ -5,6 +5,7 @@ use gpui::{div, prelude::*, px, App, Context, FocusHandle, Focusable, MouseButto
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use zbus::zvariant::{OwnedValue, Structure, Value};
+use ztheme::Theme;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TrayMenuError {
@@ -286,15 +287,16 @@ impl Focusable for TrayMenuPopup {
 
 impl Render for TrayMenuPopup {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = *cx.global::<Theme>();
         let mut col = div()
             .key_context("TrayMenu")
             .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::dismiss))
-            .bg(theme::bg())
-            .text_color(theme::fg())
+            .bg(t.bg)
+            .text_color(t.fg)
             .text_size(theme::FONT_SIZE)
             .border_1()
-            .border_color(theme::border())
+            .border_color(t.border)
             .rounded_md()
             .p_1()
             .flex()
@@ -305,7 +307,7 @@ impl Render for TrayMenuPopup {
         // "Back" row when inside a submenu.
         if let Some((parent_label, _)) = self.stack.last() {
             col = col.child(self.render_back(parent_label.clone(), cx));
-            col = col.child(div().h(px(1.)).my(px(3.)).bg(theme::separator()));
+            col = col.child(div().h(px(1.)).my(px(3.)).bg(t.separator));
         }
 
         // Clone current-level items to avoid borrowing self across the loop.
@@ -323,6 +325,7 @@ impl Render for TrayMenuPopup {
 
 impl TrayMenuPopup {
     fn render_back(&self, parent_label: String, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let t = *cx.global::<Theme>();
         div()
             .id("menu-back")
             .px_2()
@@ -332,8 +335,8 @@ impl TrayMenuPopup {
             .items_center()
             .gap_2()
             .cursor_pointer()
-            .hover(|s| s.bg(theme::surface_hover()))
-            .text_color(theme::fg_dim())
+            .hover(move |s| s.bg(t.surface_hover))
+            .text_color(t.fg_dim)
             .child(div().w(px(14.)).child("←"))
             .child(div().flex_1().child(format!("Back to {parent_label}")))
             .on_mouse_down(
@@ -347,19 +350,16 @@ impl TrayMenuPopup {
     }
 
     fn render_item(&self, item: &MenuItem, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let t = *cx.global::<Theme>();
         if item.menu_type == MenuItemType::Separator {
             return div()
                 .h(px(1.))
                 .my(px(3.))
-                .bg(theme::separator())
+                .bg(t.separator)
                 .into_any_element();
         }
 
-        let text_color = if item.enabled {
-            theme::fg()
-        } else {
-            theme::fg_dim()
-        };
+        let text_color = if item.enabled { t.fg } else { t.fg_dim };
 
         let has_submenu = !item.submenu.is_empty();
         let enabled = item.enabled;
@@ -380,7 +380,7 @@ impl TrayMenuPopup {
             let label = item.label.clone();
             row = row
                 .cursor_pointer()
-                .hover(|s| s.bg(theme::surface_hover()))
+                .hover(move |s| s.bg(t.surface_hover))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _, _window, cx| {
@@ -395,7 +395,7 @@ impl TrayMenuPopup {
             let item_id = item.id;
             row = row
                 .cursor_pointer()
-                .hover(|s| s.bg(theme::surface_hover()))
+                .hover(move |s| s.bg(t.surface_hover))
                 .on_mouse_down(MouseButton::Left, move |_, window, _cx| {
                     let _ = click_tx.try_send(MenuClickReq {
                         addr: addr.clone(),
@@ -412,7 +412,7 @@ impl TrayMenuPopup {
             row = row.child(
                 div()
                     .w(px(14.))
-                    .text_color(theme::accent())
+                    .text_color(t.accent)
                     .child(indicator.to_string()),
             );
         }
@@ -421,7 +421,7 @@ impl TrayMenuPopup {
 
         // Submenu arrow.
         if has_submenu {
-            row = row.child(div().text_color(theme::fg_dim()).child("▸"));
+            row = row.child(div().text_color(t.fg_dim).child("▸"));
         }
 
         row.into_any_element()

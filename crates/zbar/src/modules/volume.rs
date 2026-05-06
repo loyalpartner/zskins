@@ -3,6 +3,7 @@ use gpui::{div, Context, IntoElement, ParentElement, Render, Styled, Window};
 use std::io::BufRead;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
+use ztheme::Theme;
 
 #[derive(Debug, thiserror::Error)]
 enum VolumeError {
@@ -147,25 +148,22 @@ fn read_pactl() -> Option<(Option<u32>, bool)> {
 }
 
 impl Render for VolumeModule {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(vol) = self.percent else {
             return div();
         };
+        let t = *cx.global::<Theme>();
         let (icon, icon_color) = if self.muted {
-            ("󰝟", theme::urgent())
+            ("󰝟", t.urgent)
         } else {
             match vol {
-                0 => ("󰕿", theme::fg_dim()),
-                1..=50 => ("󰖀", theme::accent()),
-                _ => ("󰕾", theme::accent()),
+                0 => ("󰕿", t.fg_dim),
+                1..=50 => ("󰖀", t.accent),
+                _ => ("󰕾", t.accent),
             }
         };
-        let text_color = if self.muted {
-            theme::urgent()
-        } else {
-            theme::fg_dim()
-        };
-        theme::pill()
+        let text_color = if self.muted { t.urgent } else { t.fg_dim };
+        theme::pill(cx)
             .bg(gpui::Hsla::transparent_black())
             .flex()
             .items_center()

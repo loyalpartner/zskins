@@ -13,6 +13,7 @@ use crate::source::{
     ActivateOutcome, InspectorCard, Layout, Preview, PreviewChrome, PreviewPill, Source, SourceMeta,
 };
 use crate::theme;
+use ztheme::Theme;
 
 const PREVIEW_TEXT_MAX_LINES: usize = 200;
 
@@ -649,7 +650,8 @@ impl Launcher {
     fn render_row(&self, list_ix: usize, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let entry_ix = self.filtered[list_ix];
         let sel = list_ix == self.items.selected;
-        let content = self.source().render_item(entry_ix, sel);
+        let t = *cx.global::<Theme>();
+        let content = self.source().render_item(entry_ix, sel, &t);
 
         let mut row = div().h(theme::ITEM_HEIGHT).py(px(2.0));
         if sel {
@@ -662,11 +664,7 @@ impl Launcher {
                         // rounded right corners — matches the mockup's
                         // status-strip silhouette rather than a full-height
                         // wall.
-                        div()
-                            .w(px(3.0))
-                            .my(px(6.0))
-                            .rounded_r(px(2.0))
-                            .bg(theme::accent()),
+                        div().w(px(3.0)).my(px(6.0)).rounded_r(px(2.0)).bg(t.accent),
                     )
                     .child(
                         div()
@@ -675,7 +673,7 @@ impl Launcher {
                             .ml(px(6.0))
                             .mr(px(6.0))
                             .rounded(theme::ITEM_RADIUS)
-                            .bg(theme::accent_soft())
+                            .bg(t.accent_soft)
                             .child(content),
                     ),
             );
@@ -688,7 +686,7 @@ impl Launcher {
                         .rounded(theme::ITEM_RADIUS)
                         .child(content),
                 )
-                .hover(|s| s.bg(theme::hover_bg()));
+                .hover(move |s| s.bg(t.hover_bg));
         }
 
         row.id(list_ix).cursor_pointer().on_mouse_down(
@@ -712,6 +710,7 @@ impl Launcher {
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let sel = list_ix == self.mimes.selected;
+        let t = *cx.global::<Theme>();
         let label = if primary {
             format!("● {mime}")
         } else {
@@ -724,7 +723,7 @@ impl Launcher {
             .flex()
             .items_center()
             .text_size(theme::FONT_SIZE)
-            .text_color(if sel { theme::fg_accent() } else { theme::fg() })
+            .text_color(if sel { t.fg_accent } else { t.fg })
             .child(label);
 
         let mut row = div().h(theme::ITEM_HEIGHT).py(px(2.0));
@@ -733,13 +732,7 @@ impl Launcher {
                 div()
                     .size_full()
                     .flex()
-                    .child(
-                        div()
-                            .w(px(3.0))
-                            .my(px(6.0))
-                            .rounded_r(px(2.0))
-                            .bg(theme::accent()),
-                    )
+                    .child(div().w(px(3.0)).my(px(6.0)).rounded_r(px(2.0)).bg(t.accent))
                     .child(
                         div()
                             .flex_1()
@@ -747,7 +740,7 @@ impl Launcher {
                             .ml(px(6.0))
                             .mr(px(6.0))
                             .rounded(theme::ITEM_RADIUS)
-                            .bg(theme::accent_soft())
+                            .bg(t.accent_soft)
                             .child(content),
                     ),
             );
@@ -760,7 +753,7 @@ impl Launcher {
                         .rounded(theme::ITEM_RADIUS)
                         .child(content),
                 )
-                .hover(|s| s.bg(theme::hover_bg()));
+                .hover(move |s| s.bg(t.hover_bg));
         }
         row.id(("mime", list_ix)).cursor_pointer().on_mouse_down(
             MouseButton::Left,
@@ -773,9 +766,10 @@ impl Launcher {
     }
 
     fn render_preview_pane(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = *cx.global::<Theme>();
         let item_ix = match self.filtered.get(self.items.selected) {
             Some(&i) => i,
-            None => return div().size_full().bg(theme::preview_bg()).into_any_element(),
+            None => return div().size_full().bg(t.surface_alt).into_any_element(),
         };
         let preview = match self.left_pane {
             LeftPane::Items => self.source().preview(item_ix),
@@ -809,7 +803,7 @@ impl Launcher {
                     .py(px(16.0))
                     .text_size(theme::PREVIEW_FONT_SIZE)
                     .line_height(px(22.0))
-                    .text_color(theme::fg())
+                    .text_color(t.fg)
                     .child(text)
                     .into_any_element()
             }
@@ -819,7 +813,7 @@ impl Launcher {
                     .take(PREVIEW_TEXT_MAX_LINES)
                     .collect::<Vec<_>>()
                     .join("\n");
-                let runs = highlight::highlight(&code, &lang, theme::fg());
+                let runs = highlight::highlight(&code, &lang, t.fg);
                 let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = runs
                     .into_iter()
                     .map(|(r, color)| {
@@ -839,7 +833,7 @@ impl Launcher {
                     .py(px(16.0))
                     .text_size(theme::PREVIEW_FONT_SIZE)
                     .line_height(px(22.0))
-                    .text_color(theme::fg())
+                    .text_color(t.fg)
                     .child(StyledText::new(code).with_highlights(highlights))
                     .into_any_element()
             }
@@ -859,7 +853,7 @@ impl Launcher {
                         .size_full()
                         .rounded(px(6.0))
                         .border_1()
-                        .border_color(theme::panel_border())
+                        .border_color(t.border)
                         .overflow_hidden()
                         .flex()
                         .items_center()
@@ -875,28 +869,28 @@ impl Launcher {
             Some(Preview::Inspector(card)) => body_container
                 .id("preview-inspector")
                 .overflow_y_scroll()
-                .child(render_inspector(card, cx))
+                .child(render_inspector(card, &t, cx))
                 .into_any_element(),
             None => body_container
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(theme::fg_dim())
+                .text_color(t.fg_dim)
                 .text_size(theme::FONT_SIZE_SM)
                 .child("(no preview)")
                 .into_any_element(),
         };
 
-        let header = chrome.as_ref().map(preview_header);
+        let header = chrome.as_ref().map(|c| preview_header(c, &t));
         let footer = chrome
             .as_ref()
             .filter(|c| !c.metadata.is_empty())
-            .map(preview_metadata_strip);
+            .map(|c| preview_metadata_strip(c, &t));
         div()
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme::preview_bg())
+            .bg(t.surface_alt)
             .children(header)
             .child(body)
             .children(footer)
@@ -907,6 +901,7 @@ impl Launcher {
     /// screenshot. Rendered in place of the normal panel when `peek_active`
     /// is set; all action routes stay wired so keys work identically.
     fn render_peek(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let t = *cx.global::<Theme>();
         let item_ix = self.filtered.get(self.items.selected).copied();
         let peek_img = item_ix.and_then(|ix| self.source().peek_image(ix));
         let status = item_ix
@@ -916,21 +911,21 @@ impl Launcher {
         let image_child: AnyElement = match peek_img {
             Some(img) => img_el_for_peek(img),
             None => div()
-                .text_color(theme::fg_dim())
+                .text_color(t.fg_dim)
                 .text_size(theme::FONT_SIZE)
                 .child("(no preview available)")
                 .into_any_element(),
         };
 
-        let toast_bar = self.toast.as_ref().map(|t| {
+        let toast_bar = self.toast.as_ref().map(|toast_text| {
             div()
                 .px(px(12.0))
                 .py(px(6.0))
                 .rounded(px(6.0))
-                .bg(theme::selected_bg())
-                .text_color(theme::fg_accent())
+                .bg(t.selected_bg)
+                .text_color(t.fg_accent)
                 .text_size(theme::FONT_SIZE_SM)
-                .child(t.clone())
+                .child(toast_text.clone())
         });
 
         div()
@@ -958,10 +953,10 @@ impl Launcher {
                     .items_center()
                     .gap(px(16.0))
                     .text_size(theme::FONT_SIZE_SM)
-                    .text_color(theme::fg_dim())
+                    .text_color(t.fg_dim)
                     .child(
                         div()
-                            .text_color(theme::fg_accent())
+                            .text_color(t.fg_accent)
                             .font_weight(FontWeight::MEDIUM)
                             .child(status),
                     )
@@ -983,6 +978,7 @@ impl Launcher {
 
     fn render_source_bar(&self, cx: &mut Context<Self>) -> gpui::Div {
         let mut bar = div().flex().items_center().gap(px(4.0));
+        let t = *cx.global::<Theme>();
         // Flat layout: every reachable view is a peer pill. UnionAll uses
         // its outer registry icon; UnionChild uses its child's icon. This
         // collapses the previous two-level (outer tabs + sub-filter tabs)
@@ -990,7 +986,7 @@ impl Launcher {
         for (ix, slot) in self.slots.iter().enumerate() {
             let icon = self.slot_icon(*slot);
             let label = self.slot_label(*slot);
-            let tint = self.slot_tint(*slot);
+            let tint = self.slot_tint(*slot, &t);
             let selected = ix == self.active_slot;
             let tab = tab_pill(
                 ("bar-slot", ix),
@@ -998,6 +994,7 @@ impl Launcher {
                 label,
                 tint,
                 selected,
+                &t,
                 cx.entity().downgrade(),
                 move |this, window, cx| this.apply_slot(ix, window, cx),
             );
@@ -1075,16 +1072,16 @@ impl Launcher {
     /// Icon tint for a slot. UnionAll uses the generic accent; per-source
     /// tabs route through `theme::category()` keyed on the source's name
     /// (or the child's name for UnionChild).
-    fn slot_tint(&self, slot: BarSlot) -> Hsla {
+    fn slot_tint(&self, slot: BarSlot, t: &Theme) -> Hsla {
         match slot {
-            BarSlot::UnionAll(_) => theme::accent(),
-            BarSlot::Registry(i) => theme::category(self.registry.get(i).name()),
+            BarSlot::UnionAll(_) => t.accent,
+            BarSlot::Registry(i) => theme::category(self.registry.get(i).name(), t),
             BarSlot::UnionChild(i, j) => {
                 let children = self.registry.get(i).source.sub_sources();
                 children
                     .get(j)
-                    .map(|m| theme::category(m.name))
-                    .unwrap_or_else(theme::accent)
+                    .map(|m| theme::category(m.name, t))
+                    .unwrap_or(t.accent)
             }
         }
     }
@@ -1127,6 +1124,7 @@ impl Render for Launcher {
         if self.peek_active {
             return self.render_peek(cx).into_any_element();
         }
+        let t = *cx.global::<Theme>();
         let count = self.filtered.len();
         let pos = if count > 0 {
             format!("{}/{}", self.items.selected + 1, count)
@@ -1155,7 +1153,7 @@ impl Render for Launcher {
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(theme::fg_dim())
+                .text_color(t.fg_dim)
                 .text_size(theme::FONT_SIZE)
                 .child(empty_text)
                 .into_any_element(),
@@ -1210,6 +1208,7 @@ impl Render for Launcher {
                         .child(list_pane),
                 )
                 .child(div().w(px(1.0)).h_full().bg(theme::bar_border()))
+                // ^ bar_border() is a product-specific tween color.
                 .child(
                     div()
                         .w(theme::SPLIT_PREVIEW_W)
@@ -1225,14 +1224,14 @@ impl Render for Launcher {
         // Toast bar: thin flash strip below the input separator. Cleared on
         // any arrow / confirm / dismiss / source switch (existing convention)
         // — no timer; the next user action wipes it.
-        let toast_bar = self.toast.as_ref().map(|t| {
+        let toast_bar = self.toast.as_ref().map(|toast_text| {
             div()
                 .px(px(14.0))
                 .py(px(6.0))
                 .bg(theme::pill_active_bg())
                 .text_color(theme::pill_active_fg())
                 .text_size(theme::FONT_SIZE_SM)
-                .child(t.clone())
+                .child(toast_text.clone())
         });
 
         div()
@@ -1260,10 +1259,10 @@ impl Render for Launcher {
                     .h(panel_h)
                     .flex()
                     .flex_col()
-                    .bg(theme::panel_bg())
+                    .bg(t.bg)
                     .rounded(theme::PANEL_RADIUS)
                     .border_1()
-                    .border_color(theme::panel_border())
+                    .border_color(t.border)
                     .overflow_hidden()
                     // Global type stack for the launcher chrome — Fira Sans
                     // for body, deliberately leaving monospace pills /
@@ -1292,7 +1291,7 @@ impl Render for Launcher {
                                     .flex_shrink_0()
                                     .font_family("Fira Code")
                                     .text_size(px(11.0))
-                                    .text_color(theme::fg_dim())
+                                    .text_color(t.fg_dim)
                                     .children(prefix_hints.iter().map(|(ch, name)| {
                                         div()
                                             .flex()
@@ -1302,9 +1301,7 @@ impl Render for Launcher {
                                             .py(px(2.0))
                                             .rounded(px(3.0))
                                             .bg(theme::kbd_bg())
-                                            .child(
-                                                div().text_color(theme::fg()).child(ch.to_string()),
-                                            )
+                                            .child(div().text_color(t.fg).child(ch.to_string()))
                                             .child(div().child(name.clone()))
                                     })),
                             )
@@ -1313,7 +1310,7 @@ impl Render for Launcher {
                                     .flex_shrink_0()
                                     .font_family("Fira Code")
                                     .text_size(px(11.0))
-                                    .text_color(theme::fg_dim())
+                                    .text_color(t.fg_dim)
                                     .child(pos),
                             ),
                     )
@@ -1331,7 +1328,7 @@ impl Render for Launcher {
                             .gap(px(16.0))
                             .border_t_1()
                             .border_color(theme::bar_border())
-                            .bg(theme::panel_bg())
+                            .bg(t.bg)
                             .text_size(theme::FONT_SIZE_SM)
                             .child(source_bar)
                             .child(
@@ -1346,16 +1343,17 @@ impl Render for Launcher {
                                         },
                                         &["tab"],
                                         KEY_NORMAL,
+                                        &t,
                                     ))
-                                    .child(key_hint("Source", &["ctrl", "tab"], KEY_NORMAL))
+                                    .child(key_hint("Source", &["ctrl", "tab"], KEY_NORMAL, &t))
                                     .when(self.source().can_peek(), |d| {
-                                        d.child(key_hint("Peek", &["space"], KEY_NORMAL))
+                                        d.child(key_hint("Peek", &["space"], KEY_NORMAL, &t))
                                     })
                                     .when(self.source().can_copy_image(), |d| {
-                                        d.child(key_hint("Copy", &["⌃C"], KEY_NORMAL))
+                                        d.child(key_hint("Copy", &["⌃C"], KEY_NORMAL, &t))
                                     })
-                                    .child(key_hint("Close", &["esc"], KEY_NORMAL))
-                                    .child(key_hint("Activate", &["↵"], KEY_PRIMARY)),
+                                    .child(key_hint("Close", &["esc"], KEY_NORMAL, &t))
+                                    .child(key_hint("Activate", &["↵"], KEY_PRIMARY, &t)),
                             ),
                     ),
             )
@@ -1372,32 +1370,31 @@ impl Focusable for Launcher {
 /// Factored-out switcher-bar tab: pill styling + click handler. Both the
 /// multi-source and sub-filter bars use this so selection, hover, and
 /// focus-restore stay in sync across the two paths.
+#[allow(clippy::too_many_arguments)]
 fn tab_pill(
     id: impl Into<gpui::ElementId>,
     icon: &'static str,
     label: String,
     tint: Hsla,
     selected: bool,
+    t: &Theme,
     entity: gpui::WeakEntity<Launcher>,
     on_click: impl Fn(&mut Launcher, &mut Window, &mut Context<Launcher>) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     let bg = if selected {
-        theme::accent_soft()
+        t.accent_soft
     } else {
         gpui::transparent_black()
     };
-    let fg = if selected {
-        theme::fg_accent()
-    } else {
-        theme::fg_dim()
-    };
+    let fg = if selected { t.fg_accent } else { t.fg_dim };
     let border_color = if selected {
-        theme::accent()
+        t.accent
     } else {
         // Transparent placeholder keeps every tab the same height so the
         // underline appearing on selection doesn't shift its neighbours.
         gpui::transparent_black()
     };
+    let hover_bg = t.hover_bg;
     div()
         .id(id)
         .cursor_pointer()
@@ -1409,7 +1406,7 @@ fn tab_pill(
         .bg(bg)
         .text_size(theme::FONT_SIZE_SM)
         .text_color(fg)
-        .hover(|s| s.bg(theme::hover_bg()))
+        .hover(move |s| s.bg(hover_bg))
         .flex()
         .items_center()
         .gap(px(6.0))
@@ -1452,7 +1449,7 @@ fn img_el_for_peek(image: std::sync::Arc<gpui::Image>) -> AnyElement {
 /// Title + status pills above the preview body. The whole thing is one
 /// row separated from the body by a bottom border — lines up with the
 /// search-bar separator style.
-fn preview_header(c: &PreviewChrome) -> gpui::Div {
+fn preview_header(c: &PreviewChrome, t: &Theme) -> gpui::Div {
     let mut row = div()
         .flex()
         .items_center()
@@ -1460,7 +1457,7 @@ fn preview_header(c: &PreviewChrome) -> gpui::Div {
         .px(px(16.0))
         .py(px(10.0))
         .border_b_1()
-        .border_color(theme::panel_border())
+        .border_color(t.border)
         .child(
             div()
                 .flex_1()
@@ -1470,22 +1467,22 @@ fn preview_header(c: &PreviewChrome) -> gpui::Div {
                 .text_ellipsis()
                 .text_size(px(14.0))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme::fg())
+                .text_color(t.fg)
                 .child(c.title.clone()),
         );
     for pill in &c.pills {
-        row = row.child(render_pill(pill));
+        row = row.child(render_pill(pill, t));
     }
     row
 }
 
 /// Single status pill: green on translucent green for `active=true`,
 /// neutral dim for everything else.
-fn render_pill(p: &PreviewPill) -> gpui::Div {
+fn render_pill(p: &PreviewPill, t: &Theme) -> gpui::Div {
     let (fg, bg) = if p.active {
         (theme::pill_active_fg(), theme::pill_active_bg())
     } else {
-        (theme::fg_dim(), theme::kbd_bg())
+        (t.fg_dim, theme::kbd_bg())
     };
     let mut row = div()
         .flex()
@@ -1517,7 +1514,7 @@ fn render_pill(p: &PreviewPill) -> gpui::Div {
 /// Render an [`InspectorCard`] body — hero block (icon + title + subtitle)
 /// followed by a stack of click-to-copy rows. Each row writes its `value` to
 /// the system clipboard and pops a transient toast on the launcher.
-fn render_inspector(card: InspectorCard, cx: &mut Context<Launcher>) -> gpui::Div {
+fn render_inspector(card: InspectorCard, t: &Theme, cx: &mut Context<Launcher>) -> gpui::Div {
     let icon_el: AnyElement = match card.icon {
         Some(image) => div()
             .size(px(96.0))
@@ -1533,7 +1530,7 @@ fn render_inspector(card: InspectorCard, cx: &mut Context<Launcher>) -> gpui::Di
             .flex()
             .items_center()
             .justify_center()
-            .text_color(theme::fg_dim())
+            .text_color(t.fg_dim)
             .text_size(px(40.0))
             .child("\u{25cb}")
             .into_any_element(),
@@ -1554,7 +1551,7 @@ fn render_inspector(card: InspectorCard, cx: &mut Context<Launcher>) -> gpui::Di
             div()
                 .max_w_full()
                 .px(px(20.0))
-                .text_color(theme::fg_accent())
+                .text_color(t.fg_accent)
                 .text_size(px(20.0))
                 .font_weight(FontWeight::MEDIUM)
                 .overflow_hidden()
@@ -1567,7 +1564,7 @@ fn render_inspector(card: InspectorCard, cx: &mut Context<Launcher>) -> gpui::Di
             div()
                 .max_w_full()
                 .px(px(20.0))
-                .text_color(theme::fg_dim())
+                .text_color(t.fg_dim)
                 .text_size(px(13.0))
                 .overflow_hidden()
                 .whitespace_nowrap()
@@ -1582,14 +1579,15 @@ fn render_inspector(card: InspectorCard, cx: &mut Context<Launcher>) -> gpui::Di
         .px(px(12.0))
         .pb(px(20.0))
         .border_t_1()
-        .border_color(theme::panel_border())
+        .border_color(t.border)
         .pt(px(10.0));
+    let hover_bg = t.hover_bg;
     for (i, row) in card.rows.into_iter().enumerate() {
         let value_for_copy = row.value.clone();
         let value_display = row.value.clone();
         let label_for_toast = row.label.clone();
         let label_display = row.label.clone();
-        let value_color = theme::fg();
+        let value_color = t.fg;
         let value_div = if row.mono {
             div().font_family("monospace").text_color(value_color)
         } else {
@@ -1605,12 +1603,12 @@ fn render_inspector(card: InspectorCard, cx: &mut Context<Launcher>) -> gpui::Di
                 .py(px(7.0))
                 .rounded(px(6.0))
                 .cursor_pointer()
-                .hover(|s| s.bg(theme::hover_bg()))
+                .hover(move |s| s.bg(hover_bg))
                 .child(
                     div()
                         .w(px(110.0))
                         .flex_shrink_0()
-                        .text_color(theme::fg_dim())
+                        .text_color(t.fg_dim)
                         .text_size(px(12.0))
                         .child(label_display),
                 )
@@ -1626,7 +1624,7 @@ fn render_inspector(card: InspectorCard, cx: &mut Context<Launcher>) -> gpui::Di
                 .child(
                     div()
                         .flex_shrink_0()
-                        .text_color(theme::fg_dim())
+                        .text_color(t.fg_dim)
                         .text_size(px(18.0))
                         .child("\u{29c9}"),
                 )
@@ -1649,22 +1647,22 @@ fn render_inspector(card: InspectorCard, cx: &mut Context<Launcher>) -> gpui::Di
         .child(rows_col)
 }
 
-fn preview_metadata_strip(c: &PreviewChrome) -> gpui::Div {
+fn preview_metadata_strip(c: &PreviewChrome, t: &Theme) -> gpui::Div {
     let mut row = div()
         .flex()
         .gap(px(18.0))
         .px(px(16.0))
         .py(px(8.0))
         .border_t_1()
-        .border_color(theme::panel_border())
+        .border_color(t.border)
         .text_size(px(11.0))
-        .text_color(theme::fg_dim());
+        .text_color(t.fg_dim);
     for (k, v) in &c.metadata {
         row = row.child(
             div()
                 .flex()
                 .gap(px(6.0))
-                .child(div().text_color(theme::fg()).child(k.clone()))
+                .child(div().text_color(t.fg).child(k.clone()))
                 .child(div().child(v.clone())),
         );
     }
@@ -1677,12 +1675,8 @@ fn preview_metadata_strip(c: &PreviewChrome) -> gpui::Div {
 const KEY_PRIMARY: bool = true;
 const KEY_NORMAL: bool = false;
 
-fn key_hint(label: &str, keys: &[&str], primary: bool) -> gpui::Div {
-    let label_color = if primary {
-        gpui::white()
-    } else {
-        theme::fg_accent()
-    };
+fn key_hint(label: &str, keys: &[&str], primary: bool, t: &Theme) -> gpui::Div {
+    let label_color = if primary { gpui::white() } else { t.fg_accent };
     let label_weight = if primary {
         FontWeight::BOLD
     } else {
@@ -1819,7 +1813,7 @@ mod tests {
         fn filter(&self, _: &str) -> Vec<usize> {
             Vec::new()
         }
-        fn render_item(&self, _: usize, _: bool) -> AnyElement {
+        fn render_item(&self, _: usize, _: bool, _: &ztheme::Theme) -> AnyElement {
             unimplemented!("not used in slot tests")
         }
         fn activate(&self, _: usize) -> ActivateOutcome {

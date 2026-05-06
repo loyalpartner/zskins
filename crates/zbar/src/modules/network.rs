@@ -7,6 +7,7 @@ use gpui::{
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
 };
 use std::collections::HashMap;
+use ztheme::Theme;
 
 pub struct NetworkModule {
     interfaces: Vec<IfaceSnapshot>,
@@ -109,6 +110,7 @@ fn physical_label(iface: &IfaceSnapshot) -> &str {
 impl Render for NetworkModule {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity().clone();
+        let t = *cx.global::<Theme>();
 
         let physicals: Vec<&IfaceSnapshot> =
             self.interfaces.iter().filter(|i| i.is_physical).collect();
@@ -132,13 +134,13 @@ impl Render for NetworkModule {
 
         if physicals.is_empty() {
             row = row.child(
-                theme::pill()
+                theme::pill(cx)
                     .bg(gpui::Hsla::transparent_black())
                     .flex()
                     .items_center()
                     .gap_0p5()
-                    .child(div().text_color(theme::urgent()).child("󰤭"))
-                    .child(div().text_color(theme::urgent()).child("Off")),
+                    .child(div().text_color(t.urgent).child("󰤭"))
+                    .child(div().text_color(t.urgent).child("Off")),
             );
             return row;
         }
@@ -147,11 +149,11 @@ impl Render for NetworkModule {
             let idx = iface.index;
             let up = iface.operstate.is_up();
             let icon = if iface.is_wireless { "󰤨" } else { "󰈀" };
-            let icon_color = if up { theme::green() } else { theme::urgent() };
-            let text_color = if up { theme::fg_dim() } else { theme::urgent() };
+            let icon_color = if up { t.success } else { t.urgent };
+            let text_color = if up { t.fg_dim } else { t.urgent };
             let label = physical_label(iface).to_string();
 
-            let mut pill = theme::pill()
+            let mut pill = theme::pill(cx)
                 .bg(gpui::Hsla::transparent_black())
                 .flex()
                 .items_center()
@@ -168,7 +170,7 @@ impl Render for NetworkModule {
                         .flex()
                         .justify_end()
                         .overflow_x_hidden()
-                        .text_color(theme::fg_dim())
+                        .text_color(t.fg_dim)
                         .child(rate),
                 );
             }

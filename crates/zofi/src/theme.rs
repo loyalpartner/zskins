@@ -1,4 +1,17 @@
+//! Layout constants and source-specific palette helpers for zofi.
+//!
+//! Generic semantic colors live in the workspace-shared [`ztheme`] crate
+//! and are read via `cx.global::<ztheme::Theme>()` at render time. This
+//! module retains:
+//! - dimensional constants (panel/preview sizes, font sizes, paddings)
+//! - product-specific palettes that don't belong in the cross-crate
+//!   contract: clipboard `kind_*` chips, keyboard hint pills, the
+//!   per-source category tint, and the bar border tween. These are
+//!   intentionally *not* themed yet — they're zofi-specific UX hooks
+//!   the user hasn't asked to recolor.
+
 use gpui::{px, rgb, Hsla, Pixels};
+use ztheme::Theme;
 
 // ── Dimensions ──────────────────────────────────────────────
 pub const PANEL_W: Pixels = px(640.0);
@@ -35,45 +48,13 @@ fn rgb_alpha(hex: u32, alpha: f32) -> Hsla {
     c
 }
 
-// Panel
-pub fn panel_bg() -> Hsla {
-    rgb(0x252530).into()
-}
-pub fn panel_border() -> Hsla {
-    rgb_alpha(0x3e3e50, 0.6)
-}
-
-// Text
-pub fn fg() -> Hsla {
-    rgb(0xc8c8d0).into()
-}
-pub fn fg_dim() -> Hsla {
-    rgb(0x6e6e80).into()
-}
-pub fn fg_accent() -> Hsla {
-    rgb(0xe8e8f0).into()
-}
-
-// List
-pub fn selected_bg() -> Hsla {
-    rgb_alpha(0x444458, 0.6)
-}
-pub fn hover_bg() -> Hsla {
-    rgb_alpha(0x363645, 0.5)
-}
-
-// Accent (selected row bar, active tab underline, primary key hint)
-pub fn accent() -> Hsla {
-    rgb(0x4f8cff).into()
-}
-pub fn accent_soft() -> Hsla {
-    rgb_alpha(0x4f8cff, 0.22)
-}
-
-// Preview pane: slightly darker than the panel to suggest a separate surface.
-pub fn preview_bg() -> Hsla {
-    rgb(0x1d1d27).into()
-}
+// ── Product-specific palette (not part of the shared Theme) ────────────
+//
+// Clipboard `kind_*` colors, the kbd-hint pills, and the source category
+// tints are zofi-specific affordances. They do not yet vary with the
+// global theme — keeping them constant means the visual semantics
+// ("text variants are blue, image variants are orange", "primary action
+// is the brighter pill") stay legible across both palettes.
 
 // ── Clipboard kind palette ──────────────────────────────────
 pub fn kind_text_fg() -> Hsla {
@@ -123,14 +104,17 @@ pub fn pill_active_bg() -> Hsla {
 }
 
 /// Per-source tint for icons in the source bar and union gutter. Unknown
-/// names fall back to the generic `accent()` so new sources are never
+/// names fall back to the shared theme's `accent` so new sources are never
 /// visually broken — just un-tinted until they get a palette entry.
-pub fn category(name: &str) -> Hsla {
+///
+/// Takes a [`Theme`] for the fallback path so the unknown-source case
+/// stays in sync with whatever palette the user picked.
+pub fn category(name: &str, t: &Theme) -> Hsla {
     match name {
         "windows" => rgb(0x4aa8ff).into(),
         "apps" => rgb(0xff9933).into(),
         "files" => rgb(0x33cc66).into(),
         "clipboard" => rgb(0xc466ff).into(),
-        _ => accent(),
+        _ => t.accent,
     }
 }

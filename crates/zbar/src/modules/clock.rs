@@ -2,6 +2,7 @@ use crate::theme;
 use chrono::{Local, Timelike};
 use gpui::{Context, IntoElement, ParentElement, Render, Styled, Window};
 use std::time::Duration;
+use ztheme::Theme;
 
 pub struct ClockModule {
     text: String,
@@ -35,9 +36,10 @@ impl ClockModule {
 }
 
 impl Render for ClockModule {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        theme::pill()
-            .text_color(theme::fg())
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = cx.global::<Theme>();
+        theme::pill(cx)
+            .text_color(t.fg)
             .font_weight(gpui::FontWeight::MEDIUM)
             .child(self.text.clone())
     }

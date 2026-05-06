@@ -118,7 +118,7 @@ mod tests {
         fn filter(&self, _: &str) -> Vec<usize> {
             Vec::new()
         }
-        fn render_item(&self, _: usize, _: bool) -> AnyElement {
+        fn render_item(&self, _: usize, _: bool, _: &ztheme::Theme) -> AnyElement {
             unimplemented!()
         }
         fn activate(&self, _: usize) -> ActivateOutcome {

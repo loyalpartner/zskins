@@ -76,6 +76,12 @@ fn main() -> anyhow::Result<()> {
     application()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
+            // Theme global must be installed before any module renders,
+            // otherwise `cx.global::<Theme>()` panics. zofi has a short
+            // lifetime so we don't bother with a watcher — the launcher
+            // exits on activation/dismiss; live edits to the config only
+            // take effect on the next invocation.
+            cx.set_global::<ztheme::Theme>(ztheme::load());
             cx.bind_keys(launcher::key_bindings());
 
             cx.open_window(

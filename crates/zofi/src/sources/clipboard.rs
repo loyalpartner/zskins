@@ -122,7 +122,7 @@ impl Source for ClipboardSource {
         crate::fuzzy::match_indices(query, &self.search_keys)
     }
 
-    fn render_item(&self, ix: usize, selected: bool) -> AnyElement {
+    fn render_item(&self, ix: usize, selected: bool, theme_global: &ztheme::Theme) -> AnyElement {
         let entry = &self.entries[ix];
         let label: SharedString = match entry.kind {
             Kind::Text => entry
@@ -174,9 +174,9 @@ impl Source for ClipboardSource {
                         FontWeight::NORMAL
                     })
                     .text_color(if selected {
-                        theme::fg_accent()
+                        theme_global.fg_accent
                     } else {
-                        theme::fg()
+                        theme_global.fg
                     })
                     .child(label),
             )

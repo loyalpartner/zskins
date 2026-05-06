@@ -1,4 +1,3 @@
-use crate::theme;
 use gpui::{
     div, img, px, AnyView, App, AppContext, Context, ImageSource, InteractiveElement, IntoElement,
     MouseButton, ParentElement, Render, RenderImage, SharedString, StatefulInteractiveElement,
@@ -6,6 +5,7 @@ use gpui::{
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use ztheme::Theme;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TrayError {
@@ -1362,7 +1362,8 @@ struct SimpleTooltip {
 }
 
 impl Render for SimpleTooltip {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = *cx.global::<Theme>();
         let mut col = div()
             .flex()
             .flex_col()
@@ -1370,21 +1371,17 @@ impl Render for SimpleTooltip {
             .px_2()
             .py_1()
             .rounded_sm()
-            .bg(theme::surface())
+            .bg(t.surface)
             .border_1()
-            .border_color(theme::border())
-            .text_color(theme::fg())
+            .border_color(t.border)
+            .text_color(t.fg)
             .text_size(px(12.0));
 
         if !self.title.is_empty() {
             col = col.child(div().child(self.title.clone()));
         }
         if !self.description.is_empty() {
-            col = col.child(
-                div()
-                    .text_color(theme::fg_dim())
-                    .child(self.description.clone()),
-            );
+            col = col.child(div().text_color(t.fg_dim).child(self.description.clone()));
         }
         col
     }
@@ -1397,7 +1394,8 @@ fn build_tooltip_view(tooltip: &Tooltip, cx: &mut App) -> AnyView {
 }
 
 impl Render for TrayModule {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = *cx.global::<Theme>();
         let mut row = div().flex().items_center().gap_0p5();
 
         for (addr, item) in &self.items {
@@ -1418,7 +1416,7 @@ impl Render for TrayModule {
                 .id(gpui::ElementId::Name(addr.clone().into()))
                 .cursor_pointer()
                 .rounded_sm()
-                .hover(|s| s.bg(theme::surface_hover()))
+                .hover(move |s| s.bg(t.surface_hover))
                 .p(gpui::px(2.0))
                 .on_mouse_down(MouseButton::Left, move |_, _, _cx| {
                     // Close any open menu first.
@@ -1471,12 +1469,12 @@ impl Render for TrayModule {
                     TrayIcon::File(i) => img(ImageSource::Image(i.clone())).size(ICON_SIZE),
                 })
             } else {
-                base.size(ICON_SIZE).bg(theme::fg_dim()).rounded_full()
+                base.size(ICON_SIZE).bg(t.fg_dim).rounded_full()
             };
 
             // NeedsAttention: subtle visual hint.
             let child = if item.status == ItemStatus::NeedsAttention {
-                child.bg(theme::accent_dim())
+                child.bg(t.accent_soft)
             } else {
                 child
             };

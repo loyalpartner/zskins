@@ -167,9 +167,9 @@ impl Source for UnionSource {
             .collect()
     }
 
-    fn render_item(&self, ix: usize, selected: bool) -> AnyElement {
+    fn render_item(&self, ix: usize, selected: bool, theme_global: &ztheme::Theme) -> AnyElement {
         let r = self.route(ix);
-        let child = self.children[r.child_idx].render_item(r.inner_ix, selected);
+        let child = self.children[r.child_idx].render_item(r.inner_ix, selected, theme_global);
         // Only surface the gutter when the user is looking at the mixed view;
         // a single-type listing needs no annotation and the column would just
         // indent every row unnecessarily.
@@ -180,7 +180,7 @@ impl Source for UnionSource {
         // Tint the gutter glyph by the child's category so the eye can
         // sort rows at a glance (windows/apps/files/clipboard each get a
         // distinct hue). Falls back to accent for unknown sources.
-        let tint = theme::category(self.children[r.child_idx].name());
+        let tint = theme::category(self.children[r.child_idx].name(), theme_global);
         div()
             .flex()
             .items_center()
@@ -196,7 +196,7 @@ impl Source for UnionSource {
                     .text_size(theme::FONT_SIZE)
                     .font_weight(gpui::FontWeight::BOLD)
                     .border_r_1()
-                    .border_color(theme::panel_border())
+                    .border_color(theme_global.border)
                     .child(glyph),
             )
             .child(div().flex_1().min_w_0().h_full().child(child))
@@ -415,7 +415,7 @@ mod tests {
         fn weight(&self, ix: usize) -> i32 {
             self.items[ix].1
         }
-        fn render_item(&self, _ix: usize, _sel: bool) -> AnyElement {
+        fn render_item(&self, _ix: usize, _sel: bool, _theme: &ztheme::Theme) -> AnyElement {
             unimplemented!("render not exercised in unit tests")
         }
         fn activate(&self, ix: usize) -> ActivateOutcome {
@@ -556,8 +556,8 @@ mod tests {
             fn weight(&self, ix: usize) -> i32 {
                 self.0.weight(ix)
             }
-            fn render_item(&self, ix: usize, sel: bool) -> AnyElement {
-                self.0.render_item(ix, sel)
+            fn render_item(&self, ix: usize, sel: bool, theme: &ztheme::Theme) -> AnyElement {
+                self.0.render_item(ix, sel, theme)
             }
             fn activate(&self, ix: usize) -> ActivateOutcome {
                 self.0.activate(ix)
@@ -665,7 +665,7 @@ mod tests {
             fn filter(&self, _: &str) -> Vec<usize> {
                 Vec::new()
             }
-            fn render_item(&self, _: usize, _: bool) -> AnyElement {
+            fn render_item(&self, _: usize, _: bool, _: &ztheme::Theme) -> AnyElement {
                 unimplemented!()
             }
             fn activate(&self, _: usize) -> ActivateOutcome {
@@ -779,7 +779,7 @@ mod tests {
             fn filter_scored(&self, _: &str) -> Vec<(usize, i32)> {
                 vec![(0, 0)]
             }
-            fn render_item(&self, _: usize, _: bool) -> AnyElement {
+            fn render_item(&self, _: usize, _: bool, _: &ztheme::Theme) -> AnyElement {
                 unimplemented!()
             }
             fn activate(&self, _: usize) -> ActivateOutcome {

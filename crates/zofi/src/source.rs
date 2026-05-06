@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use gpui::{AnyElement, Image};
+use ztheme::Theme;
 
 pub enum Preview {
     Text(String),
@@ -105,8 +106,10 @@ pub trait Source: 'static {
     fn filter(&self, query: &str) -> Vec<usize>;
 
     /// `selected` only drives content highlight; the row container, hover, and
-    /// click handling live in the launcher.
-    fn render_item(&self, ix: usize, selected: bool) -> AnyElement;
+    /// click handling live in the launcher. The shared [`Theme`] is passed
+    /// through so colors stay in sync with the global palette without each
+    /// source having to plumb through a `&App`.
+    fn render_item(&self, ix: usize, selected: bool, theme: &Theme) -> AnyElement;
 
     fn activate(&self, ix: usize) -> ActivateOutcome;
 
@@ -296,7 +299,7 @@ mod tests {
         fn filter(&self, _query: &str) -> Vec<usize> {
             (0..self.items.len()).collect()
         }
-        fn render_item(&self, _ix: usize, _selected: bool) -> AnyElement {
+        fn render_item(&self, _ix: usize, _selected: bool, _theme: &Theme) -> AnyElement {
             unimplemented!("not exercised in unit tests")
         }
         fn activate(&self, _ix: usize) -> ActivateOutcome {
@@ -333,7 +336,7 @@ mod tests {
             fn filter(&self, _query: &str) -> Vec<usize> {
                 vec![0, 2]
             }
-            fn render_item(&self, _ix: usize, _selected: bool) -> AnyElement {
+            fn render_item(&self, _ix: usize, _selected: bool, _theme: &Theme) -> AnyElement {
                 unimplemented!()
             }
             fn activate(&self, _ix: usize) -> ActivateOutcome {
@@ -364,7 +367,7 @@ mod tests {
             fn filter(&self, _query: &str) -> Vec<usize> {
                 Vec::new()
             }
-            fn render_item(&self, _ix: usize, _selected: bool) -> AnyElement {
+            fn render_item(&self, _ix: usize, _selected: bool, _theme: &Theme) -> AnyElement {
                 unimplemented!()
             }
             fn activate(&self, _ix: usize) -> ActivateOutcome {
@@ -402,7 +405,7 @@ mod tests {
                 // launcher will call the scored path directly, not via filter.
                 vec![0]
             }
-            fn render_item(&self, _ix: usize, _selected: bool) -> AnyElement {
+            fn render_item(&self, _ix: usize, _selected: bool, _theme: &Theme) -> AnyElement {
                 unimplemented!()
             }
             fn activate(&self, _ix: usize) -> ActivateOutcome {

@@ -1,6 +1,6 @@
 use gpui::{
-    div, prelude::*, px, Context, DisplayId, Entity, IntoElement, ParentElement, Render, Styled,
-    Window,
+    div, prelude::*, px, App, Context, DisplayId, Entity, IntoElement, ParentElement, Render,
+    Styled, Window,
 };
 use std::sync::Arc;
 use zbar::backend::WorkspaceBackend;
@@ -9,11 +9,13 @@ use zbar::modules::brightness::BrightnessModule;
 use zbar::modules::clock::ClockModule;
 use zbar::modules::cpu_mem::CpuMemModule;
 use zbar::modules::network::NetworkModule;
+use zbar::modules::settings::SettingsModule;
 pub use zbar::modules::tray::TrayModule;
 use zbar::modules::volume::VolumeModule;
 pub use zbar::modules::window_title::WindowTitleModule;
 use zbar::modules::workspaces::WorkspacesModule;
 use zbar::theme;
+use ztheme::Theme;
 
 pub struct Bar {
     workspaces: Entity<WorkspacesModule>,
@@ -25,6 +27,7 @@ pub struct Bar {
     battery: Entity<BatteryModule>,
     cpu_mem: Entity<CpuMemModule>,
     clock: Entity<ClockModule>,
+    settings: Entity<SettingsModule>,
 }
 
 impl Bar {
@@ -51,24 +54,27 @@ impl Bar {
             battery: cx.new(BatteryModule::new),
             cpu_mem: cx.new(CpuMemModule::new),
             clock: cx.new(ClockModule::new),
+            settings: cx.new(|_| SettingsModule::new(display_id)),
         }
     }
 }
 
-fn separator() -> impl IntoElement {
-    div().h(px(14.0)).w_px().bg(theme::separator())
+fn separator(cx: &App) -> impl IntoElement {
+    let t = cx.global::<Theme>();
+    div().h(px(14.0)).w_px().bg(t.separator)
 }
 
 impl Render for Bar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity_id = cx.entity().entity_id();
+        let t = *cx.global::<Theme>();
         div()
             .size_full()
             .flex()
             .items_center()
             .px(theme::PADDING_X)
-            .bg(theme::bg())
-            .text_color(theme::fg())
+            .bg(t.bg)
+            .text_color(t.fg)
             .text_size(theme::FONT_SIZE)
             .on_mouse_move(move |_: &gpui::MouseMoveEvent, _window, cx| cx.notify(entity_id))
             .child(
@@ -94,16 +100,18 @@ impl Render for Bar {
                     .justify_end()
                     .gap(theme::MODULE_GAP)
                     .child(self.tray.clone())
-                    .child(separator())
+                    .child(separator(cx))
                     .child(self.network.clone())
-                    .child(separator())
+                    .child(separator(cx))
                     .child(self.volume.clone())
                     .child(self.brightness.clone())
-                    .child(separator())
+                    .child(separator(cx))
                     .child(self.cpu_mem.clone())
                     .child(self.battery.clone())
-                    .child(separator())
-                    .child(self.clock.clone()),
+                    .child(separator(cx))
+                    .child(self.clock.clone())
+                    .child(separator(cx))
+                    .child(self.settings.clone()),
             )
     }
 }

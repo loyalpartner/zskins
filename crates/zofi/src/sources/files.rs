@@ -191,7 +191,7 @@ impl Source for FilesSource {
         g.matched.clone()
     }
 
-    fn render_item(&self, ix: usize, selected: bool) -> AnyElement {
+    fn render_item(&self, ix: usize, selected: bool, theme_global: &ztheme::Theme) -> AnyElement {
         let g = self.inner.lock().unwrap();
         let Some(path) = g.entries.get(ix).cloned() else {
             return div().into_any_element();
@@ -229,9 +229,9 @@ impl Source for FilesSource {
                         FontWeight::NORMAL
                     })
                     .text_color(if selected {
-                        theme::fg_accent()
+                        theme_global.fg_accent
                     } else {
-                        theme::fg()
+                        theme_global.fg
                     })
                     .child(SharedString::from(name)),
             )
@@ -243,7 +243,7 @@ impl Source for FilesSource {
                     .whitespace_nowrap()
                     .text_ellipsis()
                     .text_size(theme::FONT_SIZE_SM)
-                    .text_color(theme::fg_dim())
+                    .text_color(theme_global.fg_dim)
                     .child(SharedString::from(parent)),
             )
             .into_any_element()

@@ -2,6 +2,7 @@ use crate::theme;
 use gpui::{div, Context, IntoElement, ParentElement, Render, Styled, Window};
 use std::fs;
 use std::time::Duration;
+use ztheme::Theme;
 
 pub struct BatteryModule {
     capacity: Option<u8>,
@@ -80,7 +81,7 @@ fn read_battery(device: Option<&str>) -> (Option<u8>, BatteryStatus) {
 }
 
 impl Render for BatteryModule {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(cap) = self.capacity else {
             return div();
         };
@@ -92,15 +93,16 @@ impl Render for BatteryModule {
             (_, 61..=90) => "󰂀",
             _ => "󰁹",
         };
+        let t = cx.global::<Theme>();
         let color = match cap {
-            0..=10 => theme::urgent(),
-            11..=25 => theme::warning(),
+            0..=10 => t.urgent,
+            11..=25 => t.warning,
             _ => match &self.status {
-                BatteryStatus::Charging => theme::green(),
-                _ => theme::fg_dim(),
+                BatteryStatus::Charging => t.success,
+                _ => t.fg_dim,
             },
         };
-        theme::pill()
+        theme::pill(cx)
             .flex()
             .items_center()
             .gap_1()

@@ -1,5 +1,4 @@
 use crate::backend::sway::run_window_title_session;
-use crate::theme;
 use gpui::{div, px, Context, IntoElement, ParentElement, Render, Styled, Window};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
@@ -326,14 +325,15 @@ mod tests {
 }
 
 impl Render for WindowTitleModule {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let text = self.title.clone().unwrap_or_default();
+        let t = cx.global::<ztheme::Theme>();
         div()
             .max_w(px(500.))
             .overflow_x_hidden()
             .text_ellipsis()
             .whitespace_nowrap()
-            .text_color(theme::fg_dim())
+            .text_color(t.fg_dim)
             .child(text)
     }
 }

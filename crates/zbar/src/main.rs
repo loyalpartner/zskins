@@ -30,8 +30,16 @@ fn main() {
     };
 
     application().run(move |cx: &mut App| {
+        // Theme global must be installed before any module renders, otherwise
+        // the first `cx.global::<Theme>()` call panics with "no global of type
+        // Theme". Loading is fire-and-forget — failure paths inside `load`
+        // fall back to mocha and log via tracing.
+        cx.set_global::<ztheme::Theme>(ztheme::load());
+        spawn_theme_watcher(cx);
+
         cx.bind_keys(zbar::modules::network_popup::key_bindings());
         cx.bind_keys(zbar::modules::tray_menu::key_bindings());
+        cx.bind_keys(zbar::modules::settings::key_bindings());
         let backend = backend.clone();
         let sway_widths = sway_widths.clone();
         // Wayland output events arrive asynchronously after bind; wait briefly so
@@ -104,6 +112,47 @@ fn main() {
         })
         .detach();
     });
+}
+
+/// Wire `ztheme::watch` into GPUI's main loop. The watcher fires from a
+/// background thread; we route every new theme through an async channel
+/// and consume it in a `cx.spawn` task that owns an [`AsyncApp`], so the
+/// final `cx.set_global` + `cx.refresh_windows` runs on GPUI's thread.
+///
+/// The [`ztheme::WatcherHandle`] is leaked deliberately — the bar runs
+/// for the entire process lifetime and tearing the watcher down at exit
+/// adds nothing that the OS doesn't already do for us.
+fn spawn_theme_watcher(cx: &mut App) {
+    let (tx, rx) = async_channel::bounded::<ztheme::Theme>(8);
+    let handle = match ztheme::watch(move |theme| {
+        // try_send drops the new theme if the channel is full — that's
+        // fine, the next event will carry the latest state via load().
+        let _ = tx.try_send(theme);
+    }) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!(error = %e, "ztheme: watcher disabled");
+            return;
+        }
+    };
+    // Stash the handle inside the GPUI App so its lifetime matches the app.
+    // Using a leaked Box keeps the handle alive without a struct field.
+    Box::leak(Box::new(handle));
+
+    cx.spawn(async move |cx| {
+        while let Ok(theme) = rx.recv().await {
+            // `cx.update` panics only if the app has been dropped — at that
+            // point the foreground executor has stopped scheduling our task
+            // anyway, so we never observe the panic in practice. Catching it
+            // would require AnyhowAsyncContext glue that this single bounce
+            // doesn't justify.
+            cx.update(|cx| {
+                cx.set_global::<ztheme::Theme>(theme);
+                cx.refresh_windows();
+            });
+        }
+    })
+    .detach();
 }
 
 fn open_bar(

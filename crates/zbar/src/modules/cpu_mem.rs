@@ -3,6 +3,7 @@ use gpui::{div, Context, IntoElement, ParentElement, Render, Styled, Window};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::time::Duration;
+use ztheme::Theme;
 
 pub struct CpuMemModule {
     cpu_percent: f32,
@@ -100,8 +101,9 @@ fn parse_kb(s: &str) -> u64 {
 }
 
 impl Render for CpuMemModule {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        theme::pill()
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = *cx.global::<Theme>();
+        theme::pill(cx)
             .flex()
             .items_center()
             .gap_1p5()
@@ -110,22 +112,22 @@ impl Render for CpuMemModule {
                     .flex()
                     .items_center()
                     .gap_0p5()
-                    .child(div().text_color(theme::accent()).child(""))
+                    .child(div().text_color(t.accent).child(""))
                     .child(theme::pct_label(
                         format_args!("{:.0}", self.cpu_percent),
-                        theme::threshold_color(self.cpu_percent, 50.0, 80.0),
+                        theme::threshold_color(cx, self.cpu_percent, 50.0, 80.0),
                     )),
             )
-            .child(div().h_3().w_px().bg(theme::separator()))
+            .child(div().h_3().w_px().bg(t.separator))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_0p5()
-                    .child(div().text_color(theme::accent()).child(""))
+                    .child(div().text_color(t.accent).child(""))
                     .child(theme::pct_label(
                         format_args!("{:.0}", self.mem_percent),
-                        theme::threshold_color(self.mem_percent, 65.0, 85.0),
+                        theme::threshold_color(cx, self.mem_percent, 65.0, 85.0),
                     )),
             )
     }

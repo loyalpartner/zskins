@@ -511,7 +511,7 @@ impl Source for WindowsSource {
         Some(row.app_id.clone())
     }
 
-    fn render_item(&self, ix: usize, selected: bool) -> AnyElement {
+    fn render_item(&self, ix: usize, selected: bool, theme_global: &ztheme::Theme) -> AnyElement {
         let items = self.items.read().unwrap();
         let Some(row) = items.get(ix) else {
             return div().into_any_element();
@@ -541,11 +541,11 @@ impl Source for WindowsSource {
                     .size(theme::ICON_SIZE)
                     .flex_shrink_0()
                     .rounded(gpui::px(5.0))
-                    .bg(theme::hover_bg())
+                    .bg(theme_global.hover_bg)
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_color(theme::fg_dim())
+                    .text_color(theme_global.fg_dim)
                     .text_size(theme::FONT_SIZE_SM)
                     .font_weight(FontWeight::MEDIUM)
                     .child(initial)
@@ -584,14 +584,18 @@ impl Source for WindowsSource {
                             } else {
                                 FontWeight::NORMAL
                             })
-                            .text_color(if selected { gpui::white() } else { theme::fg() })
+                            .text_color(if selected {
+                                gpui::white()
+                            } else {
+                                theme_global.fg
+                            })
                             .child(row.display_label.clone()),
                     )
                     .when(!subtitle.is_empty(), |d| {
                         d.child(
                             div()
                                 .text_size(theme::FONT_SIZE_SM)
-                                .text_color(theme::fg_dim())
+                                .text_color(theme_global.fg_dim)
                                 .overflow_hidden()
                                 .whitespace_nowrap()
                                 .text_ellipsis()
