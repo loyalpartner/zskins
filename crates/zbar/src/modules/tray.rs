@@ -4,8 +4,20 @@ use gpui::{
     Styled, Window,
 };
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use ztheme::Theme;
+
+/// Shared, lock-protected hex string for the active theme's foreground.
+/// The tray-sni thread reads this whenever it needs to recolor a symbolic
+/// SVG (`load_icon_file` and friends); the GPUI thread updates it via
+/// `cx.observe_global::<Theme>` when the user picks a new palette.
+///
+/// We use a small `RwLock<&'static str>` rather than an atomic because
+/// the value is only ever one of two static literals from `ztheme::fg_hex`,
+/// so the read path is the trivial "clone the `&'static str`". Lock
+/// contention is negligible — writes happen at most once per theme switch
+/// and reads happen on icon load (already a slow path).
+pub(crate) type FgHexState = Arc<RwLock<&'static str>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TrayError {
@@ -204,7 +216,40 @@ impl TrayModule {
         let (activate_tx, activate_rx) = async_channel::bounded::<ActivateReq>(8);
         let (menu_click_tx, menu_click_rx) = async_channel::bounded::<tray_menu::MenuClickReq>(8);
 
-        cx.observe_global::<Theme>(|_, cx| cx.notify()).detach();
+        // Bridge ztheme's global `Theme` to the tray-sni thread:
+        // 1) `fg_hex_state` exposes the current symbolic-icon recolor target
+        //    so newly loaded SVGs paint correctly out of the gate.
+        // 2) `theme_changed_tx` notifies the SNI session that already-loaded
+        //    icons need to be re-fetched with the new fg, since their
+        //    recolored bytes are baked into `gpui::Image` at load time.
+        let initial_fg = ztheme::fg_hex(cx.global::<Theme>());
+        let fg_hex_state: FgHexState = Arc::new(RwLock::new(initial_fg));
+        let (theme_changed_tx, theme_changed_rx) = async_channel::bounded::<()>(4);
+
+        let observer_state = fg_hex_state.clone();
+        let observer_tx = theme_changed_tx.clone();
+        cx.observe_global::<Theme>(move |_, cx| {
+            let new_fg = ztheme::fg_hex(cx.global::<Theme>());
+            // Skip the refetch broadcast if the fg didn't actually change
+            // (theme observers can fire on unrelated state mutations).
+            let changed = {
+                let mut guard = observer_state.write().unwrap_or_else(|p| p.into_inner());
+                if *guard == new_fg {
+                    false
+                } else {
+                    *guard = new_fg;
+                    true
+                }
+            };
+            if changed {
+                // Bounded channel; if the SNI thread is backlogged we
+                // drop the extra signal — a single refetch sweep will
+                // pick up the latest fg via `fg_hex_state` anyway.
+                let _ = observer_tx.try_send(());
+            }
+            cx.notify();
+        })
+        .detach();
 
         cx.spawn(async move |this, cx| {
             while let Ok(msg) = rx.recv().await {
@@ -292,10 +337,17 @@ impl TrayModule {
         })
         .detach();
 
+        let sni_fg_state = fg_hex_state.clone();
         std::thread::Builder::new()
             .name("tray-sni".into())
             .spawn(move || {
-                async_io::block_on(run_sni_host(tx, activate_rx, menu_click_rx));
+                async_io::block_on(run_sni_host(
+                    tx,
+                    activate_rx,
+                    menu_click_rx,
+                    sni_fg_state,
+                    theme_changed_rx,
+                ));
             })
             .expect("spawn tray thread");
 
@@ -560,10 +612,20 @@ async fn run_sni_host(
     tx: async_channel::Sender<TrayMsg>,
     activate_rx: async_channel::Receiver<ActivateReq>,
     menu_click_rx: async_channel::Receiver<tray_menu::MenuClickReq>,
+    fg_hex_state: FgHexState,
+    theme_changed_rx: async_channel::Receiver<()>,
 ) {
     let mut delay_ms: u64 = 1000;
     loop {
-        match run_sni_session(&tx, &activate_rx, &menu_click_rx).await {
+        match run_sni_session(
+            &tx,
+            &activate_rx,
+            &menu_click_rx,
+            &fg_hex_state,
+            &theme_changed_rx,
+        )
+        .await
+        {
             Ok(()) => return,
             Err(e) => {
                 tracing::warn!("tray: SNI session failed: {e:#}; reconnecting in {delay_ms}ms");
@@ -578,6 +640,8 @@ async fn run_sni_session(
     tx: &async_channel::Sender<TrayMsg>,
     activate_rx: &async_channel::Receiver<ActivateReq>,
     menu_click_rx: &async_channel::Receiver<tray_menu::MenuClickReq>,
+    fg_hex_state: &FgHexState,
+    theme_changed_rx: &async_channel::Receiver<()>,
 ) -> Result<()> {
     let conn = zbus::Connection::session().await?;
 
@@ -609,6 +673,12 @@ async fn run_sni_session(
 
     let ex = async_executor::LocalExecutor::new();
     let item_metas = std::cell::RefCell::new(BTreeMap::<String, TrayItemMeta>::new());
+    // Per-item refetch trigger. On theme change we fan out a `()` to every
+    // entry so each NewIcon watcher re-issues `fetch_icon` with the new
+    // fg_hex (the recolored bytes are baked into `gpui::Image` at load
+    // time, so a simple `cx.notify()` won't repaint correctly).
+    let item_refetch =
+        std::cell::RefCell::new(BTreeMap::<String, async_channel::Sender<()>>::new());
 
     // Spawn the owner-lost cleanup task on the session-local executor so it
     // is cancelled automatically when this session ends (ex is dropped on
@@ -635,8 +705,10 @@ async fn run_sni_session(
         Ok(items) => {
             tracing::info!("tray: found {} initial item(s)", items.len());
             for addr in items {
-                let meta = add_item(&conn, &addr, &icon_cache, tx, &ex).await;
-                item_metas.borrow_mut().insert(addr, meta);
+                let (meta, refetch_tx) =
+                    add_item(&conn, &addr, &icon_cache, tx, &ex, fg_hex_state).await;
+                item_metas.borrow_mut().insert(addr.clone(), meta);
+                item_refetch.borrow_mut().insert(addr, refetch_tx);
             }
         }
         Err(e) => {
@@ -649,29 +721,57 @@ async fn run_sni_session(
             ex.tick(),
             futures_lite::future::or(
                 futures_lite::future::or(
-                    async {
-                        if let Some(ref rx) = watcher_event_rx {
-                            if let Ok(event) = rx.recv().await {
-                                match event {
-                                    WatcherEvent::ItemAdded(addr) => {
-                                        if !item_metas.borrow().contains_key(&addr) {
-                                            tracing::debug!("tray item added: {addr}");
-                                            let meta =
-                                                add_item(&conn, &addr, &icon_cache, tx, &ex).await;
-                                            item_metas.borrow_mut().insert(addr, meta);
+                    futures_lite::future::or(
+                        async {
+                            if let Some(ref rx) = watcher_event_rx {
+                                if let Ok(event) = rx.recv().await {
+                                    match event {
+                                        WatcherEvent::ItemAdded(addr) => {
+                                            if !item_metas.borrow().contains_key(&addr) {
+                                                tracing::debug!("tray item added: {addr}");
+                                                let (meta, refetch_tx) = add_item(
+                                                    &conn,
+                                                    &addr,
+                                                    &icon_cache,
+                                                    tx,
+                                                    &ex,
+                                                    fg_hex_state,
+                                                )
+                                                .await;
+                                                item_metas.borrow_mut().insert(addr.clone(), meta);
+                                                item_refetch.borrow_mut().insert(addr, refetch_tx);
+                                            }
+                                        }
+                                        WatcherEvent::ItemRemoved(addr) => {
+                                            tracing::debug!("tray item removed: {addr}");
+                                            item_metas.borrow_mut().remove(&addr);
+                                            item_refetch.borrow_mut().remove(&addr);
+                                            let _ = tx.send(TrayMsg::Remove(addr)).await;
                                         }
                                     }
-                                    WatcherEvent::ItemRemoved(addr) => {
-                                        tracing::debug!("tray item removed: {addr}");
-                                        item_metas.borrow_mut().remove(&addr);
-                                        let _ = tx.send(TrayMsg::Remove(addr)).await;
-                                    }
+                                }
+                            } else {
+                                futures_lite::future::pending::<()>().await;
+                            }
+                        },
+                        // Theme switched on the GPUI thread — fan out a
+                        // refetch trigger to every per-item NewIcon worker
+                        // so they re-issue `fetch_icon` and pick up the
+                        // updated `fg_hex` for SVG recoloring.
+                        async {
+                            if theme_changed_rx.recv().await.is_ok() {
+                                tracing::debug!(
+                                    "tray: theme changed, refetching {} icon(s)",
+                                    item_refetch.borrow().len()
+                                );
+                                let triggers: Vec<async_channel::Sender<()>> =
+                                    item_refetch.borrow().values().cloned().collect();
+                                for trigger in triggers {
+                                    let _ = trigger.try_send(());
                                 }
                             }
-                        } else {
-                            futures_lite::future::pending::<()>().await;
-                        }
-                    },
+                        },
+                    ),
                     // Menu item click from popup.
                     async {
                         if let Ok(req) = menu_click_rx.recv().await {
@@ -784,11 +884,16 @@ async fn add_item(
     icon_cache: &Arc<icon_theme::IconCache>,
     tx: &async_channel::Sender<TrayMsg>,
     ex: &async_executor::LocalExecutor<'_>,
-) -> TrayItemMeta {
+    fg_hex_state: &FgHexState,
+) -> (TrayItemMeta, async_channel::Sender<()>) {
     let empty = TrayItemMeta {
         menu_path: None,
         icon_theme_path: None,
     };
+    // Per-item refetch trigger. Capacity 4 so a burst of theme switches
+    // collapses into "do at most one extra refetch" instead of dropping
+    // the latest one.
+    let (refetch_tx, refetch_rx) = async_channel::bounded::<()>(4);
     let (destination, path) = parse_address(addr);
     let proxy = match StatusNotifierItemProxy::builder(conn)
         .destination(destination.to_string())
@@ -798,19 +903,20 @@ async fn add_item(
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!("tray: failed to build proxy for {addr}: {e}");
-                return empty;
+                return (empty, refetch_tx);
             }
         },
         Err(e) => {
             tracing::warn!("tray: invalid address {addr}: {e}");
-            return empty;
+            return (empty, refetch_tx);
         }
     };
 
+    let initial_fg = current_fg_hex(fg_hex_state);
     // Batch-fetch every property we need in one D-Bus round trip
     // (Properties.GetAll) instead of 4–5 sequential Get calls.
     let (icon, status, menu_path, tooltip, icon_theme_path) =
-        fetch_all_item_props(&proxy, icon_cache).await;
+        fetch_all_item_props(&proxy, icon_cache, initial_fg).await;
 
     let _ = tx
         .send(TrayMsg::Add {
@@ -821,13 +927,16 @@ async fn add_item(
         })
         .await;
 
-    // Spawn NewIcon watcher.
+    // Spawn NewIcon watcher. Listens on both the SNI `NewIcon` signal and
+    // a local refetch trigger that the session loop pushes when the user
+    // switches theme — both paths share the same fetch+update plumbing.
     {
         let tx = tx.clone();
         let addr = addr.to_string();
         let icon_cache = icon_cache.clone();
         let proxy_inner = proxy.inner().clone();
         let cached_theme_path = icon_theme_path.clone();
+        let fg_state = fg_hex_state.clone();
         ex.spawn(async move {
             use futures_lite::StreamExt;
             let proxy = StatusNotifierItemProxy::from(proxy_inner);
@@ -836,9 +945,34 @@ async fn add_item(
                 return;
             };
             tracing::debug!("tray: watching NewIcon for {addr}");
-            while stream.next().await.is_some() {
-                tracing::debug!("tray: NewIcon signal for {addr}");
-                let icon = fetch_icon(&proxy, &icon_cache, cached_theme_path.as_deref()).await;
+            loop {
+                // Race the SNI NewIcon signal against the theme-change
+                // refetch trigger — both produce the same downstream
+                // `UpdateIcon` message, so the body below is shared.
+                let trigger = futures_lite::future::or(
+                    async {
+                        if stream.next().await.is_some() {
+                            tracing::debug!("tray: NewIcon signal for {addr}");
+                            Some(())
+                        } else {
+                            None
+                        }
+                    },
+                    async {
+                        if refetch_rx.recv().await.is_ok() {
+                            tracing::debug!("tray: theme refetch for {addr}");
+                            Some(())
+                        } else {
+                            None
+                        }
+                    },
+                )
+                .await;
+                if trigger.is_none() {
+                    break;
+                }
+                let fg = current_fg_hex(&fg_state);
+                let icon = fetch_icon(&proxy, &icon_cache, cached_theme_path.as_deref(), fg).await;
                 if tx
                     .send(TrayMsg::UpdateIcon(addr.clone(), icon))
                     .await
@@ -903,9 +1037,23 @@ async fn add_item(
         .detach();
     }
 
-    TrayItemMeta {
-        menu_path,
-        icon_theme_path,
+    (
+        TrayItemMeta {
+            menu_path,
+            icon_theme_path,
+        },
+        refetch_tx,
+    )
+}
+
+/// Read the current foreground hex from the shared state. Falls back to the
+/// mocha literal if the lock is poisoned — the worst case is one icon
+/// rendered with the wrong recolor target, which the next theme observer
+/// fire will correct.
+fn current_fg_hex(state: &FgHexState) -> &'static str {
+    match state.read() {
+        Ok(g) => *g,
+        Err(p) => *p.into_inner(),
     }
 }
 
@@ -920,6 +1068,7 @@ async fn add_item(
 async fn fetch_all_item_props(
     proxy: &StatusNotifierItemProxy<'_>,
     icon_cache: &icon_theme::IconCache,
+    fg_hex: &str,
 ) -> (
     Option<TrayIcon>,
     ItemStatus,
@@ -1004,9 +1153,10 @@ async fn fetch_all_item_props(
             &icon_name,
             icon_theme_path.as_deref(),
             icon_cache,
+            fg_hex,
         )
     } else {
-        fetch_icon(proxy, icon_cache, icon_theme_path.as_deref()).await
+        fetch_icon(proxy, icon_cache, icon_theme_path.as_deref(), fg_hex).await
     };
 
     (icon, status, menu_path, tooltip, icon_theme_path)
@@ -1071,6 +1221,7 @@ async fn fetch_icon(
     proxy: &StatusNotifierItemProxy<'_>,
     icon_cache: &icon_theme::IconCache,
     theme_path: Option<&str>,
+    fg_hex: &str,
 ) -> Option<TrayIcon> {
     let dest = proxy.inner().destination().to_string();
     let path = proxy.inner().path().to_string();
@@ -1103,7 +1254,7 @@ async fn fetch_icon(
         .await
         .unwrap_or_default();
 
-    resolve_icon(pixmap_result, &icon_name, theme_path, icon_cache)
+    resolve_icon(pixmap_result, &icon_name, theme_path, icon_cache, fg_hex)
 }
 
 /// Resolve the best icon source from already-fetched properties. Extracted
@@ -1114,6 +1265,7 @@ fn resolve_icon(
     icon_name: &str,
     theme_path: Option<&str>,
     icon_cache: &icon_theme::IconCache,
+    fg_hex: &str,
 ) -> Option<TrayIcon> {
     if let Some(img) = pixmap_result {
         return Some(TrayIcon::Pixmap(img));
@@ -1126,7 +1278,7 @@ fn resolve_icon(
 
     tracing::debug!("tray: icon_name={icon_name}");
     if icon_name.starts_with('/') {
-        return load_icon_file(std::path::Path::new(icon_name));
+        return load_icon_file(std::path::Path::new(icon_name), fg_hex);
     }
 
     // Check app-specific IconThemePath first.
@@ -1139,7 +1291,7 @@ fn resolve_icon(
                     "tray: icon_name={icon_name} via theme_path: {}",
                     candidate.display()
                 );
-                return load_icon_file(&candidate);
+                return load_icon_file(&candidate, fg_hex);
             }
         }
         // Also check subdirectories (e.g. hicolor/48x48/status/)
@@ -1149,7 +1301,7 @@ fn resolve_icon(
                     "tray: icon_name={icon_name} via theme_path subdir: {}",
                     icon.display()
                 );
-                return load_icon_file(&icon);
+                return load_icon_file(&icon, fg_hex);
             }
         }
     }
@@ -1159,7 +1311,7 @@ fn resolve_icon(
         "tray: icon_name={icon_name} via system theme: {}",
         path.display()
     );
-    load_icon_file(path)
+    load_icon_file(path, fg_hex)
 }
 
 fn find_icon_recursive(dir: &std::path::Path, name: &str, depth: u8) -> Option<std::path::PathBuf> {
@@ -1184,7 +1336,7 @@ fn find_icon_recursive(dir: &std::path::Path, name: &str, depth: u8) -> Option<s
 
 static NEXT_IMAGE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-fn load_icon_file(path: &std::path::Path) -> Option<TrayIcon> {
+fn load_icon_file(path: &std::path::Path, fg_hex: &str) -> Option<TrayIcon> {
     // Reject oversized icon files before reading/decoding — untrusted tray
     // apps (or a malicious `IconThemePath`) could point at a huge file and
     // block the SNI thread (all tray updates are serialized).
@@ -1229,10 +1381,12 @@ fn load_icon_file(path: &std::path::Path) -> Option<TrayIcon> {
         }
         _ => return None,
     };
-    // Recolor symbolic SVG icons for dark panel — Breeze/KDE use
-    // .ColorScheme-Text with a dark color that's invisible on dark bg.
+    // Recolor symbolic SVG icons so the strokes contrast against the
+    // current panel — Breeze/KDE icons ship dark fills that vanish on a
+    // dark theme bg and look muddy on a light one. Target color tracks
+    // the active `Theme.fg` via `ztheme::fg_hex(...)`.
     let bytes = if format == gpui::ImageFormat::Svg {
-        recolor_svg_for_dark_panel(bytes)
+        recolor_svg_for_panel(bytes, fg_hex)
     } else {
         bytes
     };
@@ -1244,17 +1398,18 @@ fn load_icon_file(path: &std::path::Path) -> Option<TrayIcon> {
     })))
 }
 
-/// Replace dark fill colors in symbolic SVGs with a light panel foreground.
-fn recolor_svg_for_dark_panel(bytes: Vec<u8>) -> Vec<u8> {
-    // Must match theme::fg() = rgb(0xcdd6f4). Hardcoded because theme
-    // returns Hsla which can't be cheaply converted to hex at compile time.
-    const LIGHT: &str = "#cdd6f4";
+/// Replace common dark fill colors used by KDE/GNOME symbolic SVGs with the
+/// supplied panel foreground hex (e.g. `"#cdd6f4"` for mocha, `"#4c4f69"`
+/// for latte). `fg_hex` is taken as a parameter rather than read off a
+/// global so `load_icon_file` stays a pure function — the caller threads
+/// the active theme's fg through.
+fn recolor_svg_for_panel(bytes: Vec<u8>, fg_hex: &str) -> Vec<u8> {
     // Common dark colors used by Breeze / KDE symbolic icons.
     const DARK_COLORS: &[&str] = &["#31363b", "#232629", "#4d4d4d", "#000000"];
 
     let mut svg = String::from_utf8_lossy(&bytes).into_owned();
     for dark in DARK_COLORS {
-        svg = svg.replace(dark, LIGHT);
+        svg = svg.replace(dark, fg_hex);
     }
     svg.into_bytes()
 }
