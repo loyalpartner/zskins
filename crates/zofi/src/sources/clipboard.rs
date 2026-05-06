@@ -136,8 +136,16 @@ impl Source for ClipboardSource {
             }
         };
         let (badge_glyph, badge_fg, badge_bg): (&str, _, _) = match entry.kind {
-            Kind::Text => ("¶", theme::kind_text_fg(), theme::kind_text_bg()),
-            Kind::Image => ("◫", theme::kind_image_fg(), theme::kind_image_bg()),
+            Kind::Text => (
+                "¶",
+                theme::kind_text_fg(theme_global),
+                theme::kind_text_bg(theme_global),
+            ),
+            Kind::Image => (
+                "◫",
+                theme::kind_image_fg(theme_global),
+                theme::kind_image_bg(theme_global),
+            ),
         };
 
         div()

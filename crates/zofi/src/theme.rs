@@ -48,26 +48,48 @@ fn rgb_alpha(hex: u32, alpha: f32) -> Hsla {
     c
 }
 
-// ── Product-specific palette (not part of the shared Theme) ────────────
+// ── Product-specific palette (theme-aware) ─────────────────────────────
 //
-// Clipboard `kind_*` colors, the kbd-hint pills, and the source category
-// tints are zofi-specific affordances. They do not yet vary with the
-// global theme — keeping them constant means the visual semantics
-// ("text variants are blue, image variants are orange", "primary action
-// is the brighter pill") stay legible across both palettes.
+// Clipboard `kind_*` colors, the kbd-hint pills, source category tints,
+// and the preview-header "active" pill are zofi-specific affordances that
+// don't fit into the shared Theme's 16 semantic slots. Each helper takes
+// a `&Theme` so it can flip its concrete hex between the dark (mocha) and
+// light (latte) palettes — keeping the same semantic meaning ("text
+// variants are blue, image variants are orange", "primary action is the
+// brighter pill") legible on both backgrounds.
+//
+// Branching uses `ztheme::is_light` rather than checking a specific theme
+// preset, so a future user-supplied light theme inherits latte's tuning
+// for free.
 
 // ── Clipboard kind palette ──────────────────────────────────
-pub fn kind_text_fg() -> Hsla {
-    rgb(0x7fb8ff).into()
+pub fn kind_text_fg(t: &Theme) -> Hsla {
+    if ztheme::is_light(t) {
+        rgb(0x1e66f5).into()
+    } else {
+        rgb(0x7fb8ff).into()
+    }
 }
-pub fn kind_text_bg() -> Hsla {
-    rgb_alpha(0x3a5a85, 0.35)
+pub fn kind_text_bg(t: &Theme) -> Hsla {
+    if ztheme::is_light(t) {
+        rgb_alpha(0x7287fd, 0.18)
+    } else {
+        rgb_alpha(0x3a5a85, 0.35)
+    }
 }
-pub fn kind_image_fg() -> Hsla {
-    rgb(0xffb56e).into()
+pub fn kind_image_fg(t: &Theme) -> Hsla {
+    if ztheme::is_light(t) {
+        rgb(0xfe640b).into()
+    } else {
+        rgb(0xffb56e).into()
+    }
 }
-pub fn kind_image_bg() -> Hsla {
-    rgb_alpha(0x7a4a26, 0.35)
+pub fn kind_image_bg(t: &Theme) -> Hsla {
+    if ztheme::is_light(t) {
+        rgb_alpha(0xfe640b, 0.14)
+    } else {
+        rgb_alpha(0x7a4a26, 0.35)
+    }
 }
 
 // Bottom bar
@@ -76,45 +98,84 @@ pub fn bar_border() -> Hsla {
 }
 
 // Keyboard-hint pills (bottom bar)
-pub fn kbd_bg() -> Hsla {
-    rgb(0x30353f).into()
+pub fn kbd_bg(t: &Theme) -> Hsla {
+    if ztheme::is_light(t) {
+        rgb_alpha(0xccd0da, 0.7)
+    } else {
+        rgb(0x30353f).into()
+    }
 }
-pub fn kbd_fg() -> Hsla {
-    rgb(0xaab1bc).into()
+pub fn kbd_fg(t: &Theme) -> Hsla {
+    if ztheme::is_light(t) {
+        rgb(0x4c4f69).into()
+    } else {
+        rgb(0xaab1bc).into()
+    }
 }
-pub fn kbd_border() -> Hsla {
-    rgb_alpha(0x3d4350, 1.0)
+pub fn kbd_border(t: &Theme) -> Hsla {
+    if ztheme::is_light(t) {
+        rgb_alpha(0xacb0be, 0.7)
+    } else {
+        rgb_alpha(0x3d4350, 1.0)
+    }
 }
-pub fn kbd_accent_bg() -> Hsla {
-    rgb_alpha(0x4f8cff, 0.25)
+pub fn kbd_accent_bg(t: &Theme) -> Hsla {
+    let mut accent = t.accent;
+    accent.a = if ztheme::is_light(t) { 0.18 } else { 0.25 };
+    accent
 }
-pub fn kbd_accent_fg() -> Hsla {
-    rgb(0xe5edff).into()
+pub fn kbd_accent_fg(t: &Theme) -> Hsla {
+    if ztheme::is_light(t) {
+        rgb(0x1e66f5).into()
+    } else {
+        rgb(0xe5edff).into()
+    }
 }
-pub fn kbd_accent_border() -> Hsla {
-    rgb_alpha(0x4f8cff, 0.45)
+pub fn kbd_accent_border(t: &Theme) -> Hsla {
+    let mut accent = t.accent;
+    accent.a = if ztheme::is_light(t) { 0.4 } else { 0.45 };
+    accent
 }
 
 // Preview-header "active" pill: green text on a translucent green bg.
-pub fn pill_active_fg() -> Hsla {
-    rgb(0x5ecf8a).into()
+pub fn pill_active_fg(t: &Theme) -> Hsla {
+    if ztheme::is_light(t) {
+        rgb(0x40a02b).into()
+    } else {
+        rgb(0x5ecf8a).into()
+    }
 }
-pub fn pill_active_bg() -> Hsla {
-    rgb_alpha(0x5ecf8a, 0.15)
+pub fn pill_active_bg(t: &Theme) -> Hsla {
+    if ztheme::is_light(t) {
+        rgb_alpha(0x40a02b, 0.15)
+    } else {
+        rgb_alpha(0x5ecf8a, 0.15)
+    }
 }
 
 /// Per-source tint for icons in the source bar and union gutter. Unknown
 /// names fall back to the shared theme's `accent` so new sources are never
 /// visually broken — just un-tinted until they get a palette entry.
 ///
-/// Takes a [`Theme`] for the fallback path so the unknown-source case
-/// stays in sync with whatever palette the user picked.
+/// Takes a [`Theme`] for the fallback path and to flip the concrete tint
+/// hex between mocha (saturated, on dark bg) and latte (catppuccin spec
+/// blue/peach/green/mauve, tuned for contrast on light bg).
 pub fn category(name: &str, t: &Theme) -> Hsla {
-    match name {
-        "windows" => rgb(0x4aa8ff).into(),
-        "apps" => rgb(0xff9933).into(),
-        "files" => rgb(0x33cc66).into(),
-        "clipboard" => rgb(0xc466ff).into(),
-        _ => t.accent,
+    if ztheme::is_light(t) {
+        match name {
+            "windows" => rgb(0x1e66f5).into(),
+            "apps" => rgb(0xfe640b).into(),
+            "files" => rgb(0x40a02b).into(),
+            "clipboard" => rgb(0x8839ef).into(),
+            _ => t.accent,
+        }
+    } else {
+        match name {
+            "windows" => rgb(0x4aa8ff).into(),
+            "apps" => rgb(0xff9933).into(),
+            "files" => rgb(0x33cc66).into(),
+            "clipboard" => rgb(0xc466ff).into(),
+            _ => t.accent,
+        }
     }
 }

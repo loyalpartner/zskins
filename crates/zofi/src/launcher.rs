@@ -1229,8 +1229,8 @@ impl Render for Launcher {
             div()
                 .px(px(14.0))
                 .py(px(6.0))
-                .bg(theme::pill_active_bg())
-                .text_color(theme::pill_active_fg())
+                .bg(theme::pill_active_bg(&t))
+                .text_color(theme::pill_active_fg(&t))
                 .text_size(theme::FONT_SIZE_SM)
                 .child(toast_text.clone())
         });
@@ -1301,7 +1301,7 @@ impl Render for Launcher {
                                             .px(px(6.0))
                                             .py(px(2.0))
                                             .rounded(px(3.0))
-                                            .bg(theme::kbd_bg())
+                                            .bg(theme::kbd_bg(&t))
                                             .child(div().text_color(t.fg).child(ch.to_string()))
                                             .child(div().child(name.clone()))
                                     })),
@@ -1420,7 +1420,7 @@ fn tab_pill(
                 .w(px(16.0))
                 .h(px(16.0))
                 .rounded(px(3.0))
-                .bg(theme::kbd_bg())
+                .bg(theme::kbd_bg(t))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -1481,9 +1481,9 @@ fn preview_header(c: &PreviewChrome, t: &Theme) -> gpui::Div {
 /// neutral dim for everything else.
 fn render_pill(p: &PreviewPill, t: &Theme) -> gpui::Div {
     let (fg, bg) = if p.active {
-        (theme::pill_active_fg(), theme::pill_active_bg())
+        (theme::pill_active_fg(t), theme::pill_active_bg(t))
     } else {
-        (t.fg_dim, theme::kbd_bg())
+        (t.fg_dim, theme::kbd_bg(t))
     };
     let mut row = div()
         .flex()
@@ -1503,7 +1503,7 @@ fn render_pill(p: &PreviewPill, t: &Theme) -> gpui::Div {
                 .w(px(6.0))
                 .h(px(6.0))
                 .rounded(px(999.0))
-                .bg(theme::pill_active_fg()),
+                .bg(theme::pill_active_fg(t)),
         );
     }
     row.child(p.text.clone())
@@ -1685,19 +1685,19 @@ fn key_hint(label: &str, keys: &[&str], primary: bool, t: &Theme) -> gpui::Div {
     };
 
     let key_bg = if primary {
-        theme::kbd_accent_bg()
+        theme::kbd_accent_bg(t)
     } else {
-        theme::kbd_bg()
+        theme::kbd_bg(t)
     };
     let key_fg = if primary {
-        theme::kbd_accent_fg()
+        theme::kbd_accent_fg(t)
     } else {
-        theme::kbd_fg()
+        theme::kbd_fg(t)
     };
     let key_border = if primary {
-        theme::kbd_accent_border()
+        theme::kbd_accent_border(t)
     } else {
-        theme::kbd_border()
+        theme::kbd_border(t)
     };
 
     let mut row = div().flex().items_center().gap(px(6.0)).child(

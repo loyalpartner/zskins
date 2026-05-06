@@ -113,8 +113,10 @@ impl Theme {
     pub fn catppuccin_latte() -> Self {
         Self {
             bg: alpha(0xeff1f5, 0.85),
-            surface: alpha(0xccd0da, 0.6),
-            surface_hover: alpha(0xbcc0cc, 0.7),
+            // Surfaces sit lighter than mocha so pills float over the
+            // bg with visible contrast on bright wallpapers.
+            surface: alpha(0xccd0da, 0.4),
+            surface_hover: alpha(0xbcc0cc, 0.55),
             surface_alt: rgb(0xe6e9ef).into(),
             fg: rgb(0x4c4f69).into(),
             fg_dim: rgb(0x6c6f85).into(),
@@ -126,9 +128,39 @@ impl Theme {
             success: rgb(0x40a02b).into(),
             border: alpha(0x9ca0b0, 0.35),
             separator: alpha(0x9ca0b0, 0.25),
-            selected_bg: alpha(0xbcc0cc, 0.6),
-            hover_bg: alpha(0xccd0da, 0.5),
+            // selected_bg promoted to surface2 so it reads as the most
+            // emphasized state; hover_bg sits between surface and selected.
+            selected_bg: alpha(0xacb0be, 0.7),
+            hover_bg: alpha(0xbcc0cc, 0.5),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Brightness helpers
+// ---------------------------------------------------------------------------
+
+/// Whether the active theme reads as a light palette. Built-in mocha returns
+/// `false`, latte returns `true`. Used by callers that need to flip a
+/// product-specific palette without taking a hard dep on a specific theme
+/// preset (e.g. zofi's `kind_*`/`kbd_*`/`category` helpers).
+///
+/// Lightness threshold is fixed at `bg.l > 0.5` — this stays true for any
+/// reasonable user-supplied light theme even if its exact bg differs from
+/// catppuccin latte.
+pub fn is_light(theme: &Theme) -> bool {
+    theme.bg.l > 0.5
+}
+
+/// Foreground hex string suitable for SVG symbolic-icon recoloring. Returns
+/// the literal hex used by mocha (`#cdd6f4`) or latte (`#4c4f69`) so it can
+/// be plugged directly into a `String::replace` pass without a HSL→RGB
+/// conversion.
+pub fn fg_hex(theme: &Theme) -> &'static str {
+    if is_light(theme) {
+        "#4c4f69"
+    } else {
+        "#cdd6f4"
     }
 }
 
@@ -332,6 +364,18 @@ mod tests {
         let path = dir.path().join("config.toml");
         save_to(&path, MOCHA_NAME).unwrap();
         assert_eq!(load_from(&path), Theme::catppuccin_mocha());
+    }
+
+    #[test]
+    fn is_light_distinguishes_presets() {
+        assert!(!is_light(&Theme::catppuccin_mocha()));
+        assert!(is_light(&Theme::catppuccin_latte()));
+    }
+
+    #[test]
+    fn fg_hex_returns_preset_specific_literal() {
+        assert_eq!(fg_hex(&Theme::catppuccin_mocha()), "#cdd6f4");
+        assert_eq!(fg_hex(&Theme::catppuccin_latte()), "#4c4f69");
     }
 
     #[test]
