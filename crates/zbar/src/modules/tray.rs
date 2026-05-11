@@ -38,9 +38,28 @@ pub struct TrayModule {
     /// For sending CloseMenu from popup back to ourselves.
     self_tx: async_channel::Sender<TrayMsg>,
     display_id: Option<gpui::DisplayId>,
-    /// Currently-open context menu: the item address and its popup handle
-    /// are kept together to prevent them drifting out of sync.
-    open_menu: Option<(String, gpui::WindowHandle<tray_menu::TrayMenuPopup>)>,
+    /// The display the bar currently being rendered lives on. Bars call
+    /// `set_render_display` before painting their tray section so the
+    /// right-click handlers in the element tree capture the correct
+    /// `DisplayId` for popup placement. (GPUI layer-shell windows do not
+    /// expose their bound output, so we route this via the parent bar.)
+    render_display: Option<gpui::DisplayId>,
+    /// Token from `popup_catcher::register`, used to opt out of our own
+    /// dismiss broadcast when opening a new menu.
+    popup_kind: crate::popup_catcher::PopupKind,
+    /// Currently-open context menu: the item address, popup handle, and a
+    /// transparent full-screen catcher window that dismisses the menu on
+    /// any click outside the menu body. All three are kept together to
+    /// prevent them drifting out of sync.
+    open_menu: Option<OpenMenu>,
+}
+
+struct OpenMenu {
+    addr: String,
+    popup: gpui::WindowHandle<tray_menu::TrayMenuPopup>,
+    /// One transparent full-screen catcher per output, so a click on *any*
+    /// display dismisses the menu — not just the display the popup lives on.
+    catchers: Vec<gpui::WindowHandle<crate::popup_catcher::PopupCatcher>>,
 }
 
 struct TrayItem {
@@ -121,6 +140,7 @@ pub(crate) enum TrayMsg {
         menu_path: String,
         items: Vec<tray_menu::MenuItem>,
         click_x: f32,
+        display_id: Option<gpui::DisplayId>,
     },
 }
 
@@ -128,8 +148,10 @@ pub(crate) enum TrayMsg {
 enum ActivateReq {
     Default(String),
     Secondary(String),
-    /// Right-click: fetch and show context menu. Carries click X for positioning.
-    Menu(String, f32),
+    /// Right-click: fetch and show context menu. Carries click X for
+    /// positioning and the display the click happened on so the popup
+    /// can open on the same output.
+    Menu(String, f32, Option<gpui::DisplayId>),
     /// Scroll: forward wheel delta to app (e.g. pavucontrol volume,
     /// Telegram chat switching). Orientation is "vertical" or "horizontal".
     Scroll(String, i32, &'static str),
@@ -140,7 +162,7 @@ impl ActivateReq {
         match self {
             ActivateReq::Default(a)
             | ActivateReq::Secondary(a)
-            | ActivateReq::Menu(a, _)
+            | ActivateReq::Menu(a, _, _)
             | ActivateReq::Scroll(a, _, _) => a.as_str(),
         }
     }
@@ -205,8 +227,19 @@ trait StatusNotifierItem {
 
 impl TrayModule {
     fn close_menu(&mut self, cx: &mut gpui::App) {
-        if let Some((_, handle)) = self.open_menu.take() {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        if let Some(open) = self.open_menu.take() {
+            let _ = open.popup.update(cx, |_, window, _| window.remove_window());
+            for catcher in open.catchers {
+                let _ = catcher.update(cx, |_, window, _| window.remove_window());
+            }
+        }
+    }
+
+    fn close_menu_and_notify(&mut self, cx: &mut Context<Self>) {
+        let was_open = self.open_menu.is_some();
+        self.close_menu(cx);
+        if was_open {
+            cx.notify();
         }
     }
 
@@ -215,6 +248,13 @@ impl TrayModule {
         let self_tx = tx.clone();
         let (activate_tx, activate_rx) = async_channel::bounded::<ActivateReq>(8);
         let (menu_click_tx, menu_click_rx) = async_channel::bounded::<tray_menu::MenuClickReq>(8);
+
+        // Cross-module dismissal: settings/network call `dismiss_others` and
+        // we feed the signal into our own `TrayMsg::CloseMenu` drain.
+        let (popup_kind, _) =
+            crate::popup_catcher::register_entity(cx, move |m: &mut TrayModule, _| {
+                let _ = m.self_tx.try_send(TrayMsg::CloseMenu);
+            });
 
         // Bridge ztheme's global `Theme` to the tray-sni thread:
         // 1) `fg_hex_state` exposes the current symbolic-icon recolor target
@@ -301,31 +341,49 @@ impl TrayModule {
                             }
                         }
                         TrayMsg::CloseMenu => {
-                            m.close_menu(cx);
+                            m.close_menu_and_notify(cx);
                         }
                         TrayMsg::MenuReady {
                             addr,
                             menu_path,
                             items,
                             click_x,
+                            display_id,
                         } => {
                             // Toggle: if same addr menu is already open, just close.
-                            if m.open_menu.as_ref().map(|(a, _)| a.as_str()) == Some(&addr) {
-                                m.close_menu(cx);
+                            if m.open_menu.as_ref().map(|o| o.addr.as_str()) == Some(&addr) {
+                                m.close_menu_and_notify(cx);
                                 return;
                             }
                             m.close_menu(cx);
-                            if let Some(handle) = tray_menu::open_menu_popup(
+                            // Dismiss other popups (settings, network) so
+                            // only the tray menu remains on screen.
+                            crate::popup_catcher::dismiss_others(cx, m.popup_kind);
+                            // Prefer the display the click came from; fall
+                            // back to the tray module's seed display so the
+                            // popup still has a home if no display was
+                            // captured (e.g. headless test path).
+                            let popup_display = display_id.or(m.display_id);
+                            if let Some((popup, catchers)) = tray_menu::open_menu_popup(
                                 cx,
                                 items,
                                 addr.clone(),
                                 menu_path,
                                 m.menu_click_tx.clone(),
                                 m.self_tx.clone(),
-                                m.display_id,
+                                popup_display,
                                 click_x,
                             ) {
-                                m.open_menu = Some((addr, handle));
+                                m.open_menu = Some(OpenMenu {
+                                    addr,
+                                    popup,
+                                    catchers,
+                                });
+                                // Re-render so all bar instances drop their
+                                // tooltip wiring while the menu is up.
+                                cx.notify();
+                            } else {
+                                tracing::warn!("tray: open_menu_popup returned None");
                             }
                         }
                     })
@@ -357,8 +415,17 @@ impl TrayModule {
             menu_click_tx,
             self_tx,
             display_id,
+            render_display: display_id,
+            popup_kind,
             open_menu: None,
         }
+    }
+
+    /// Bar uses this to declare which display the upcoming render call is
+    /// for. Right-click handlers in tray's element tree close over the
+    /// current value so they capture the correct display per bar.
+    pub fn set_render_display(&mut self, display_id: Option<gpui::DisplayId>) {
+        self.render_display = display_id;
     }
 }
 
@@ -815,7 +882,7 @@ async fn handle_activate(
     let addr = req.addr();
 
     match req {
-        ActivateReq::Menu(_, click_x) => {
+        ActivateReq::Menu(_, click_x, display_id) => {
             if let Some(menu_path) = meta.and_then(|m| m.menu_path.as_ref()) {
                 match tray_menu::fetch_menu(conn, addr, menu_path).await {
                     Ok(menu_items) => {
@@ -825,6 +892,7 @@ async fn handle_activate(
                                 menu_path: menu_path.clone(),
                                 items: menu_items,
                                 click_x,
+                                display_id,
                             })
                             .await;
                     }
@@ -856,7 +924,7 @@ async fn handle_activate(
                 ActivateReq::Scroll(_, delta, orientation) => {
                     proxy.scroll(delta, orientation).await
                 }
-                ActivateReq::Menu(_, _) => unreachable!(),
+                ActivateReq::Menu(_, _, _) => unreachable!(),
             };
             if let Err(e) = result {
                 tracing::warn!("tray: activate failed for {addr}: {e}");
@@ -1554,6 +1622,11 @@ impl Render for TrayModule {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = *cx.global::<Theme>();
         let mut row = div().flex().items_center().gap_0p5();
+        // Skip per-item tooltips while a context menu is open. Otherwise
+        // GPUI keeps the hover tooltip drawn on the bar (it's painted in
+        // the bar's window, not the menu overlay), so the menu and the
+        // tooltip end up on screen together.
+        let menu_open = self.open_menu.is_some();
 
         for (addr, item) in &self.items {
             // Passive items are hidden per SNI spec.
@@ -1568,6 +1641,7 @@ impl Render for TrayModule {
             let addr_click = addr.clone();
             let addr_menu = addr.clone();
             let addr_scroll = addr.clone();
+            let render_display_for_click = self.render_display;
 
             let base = div()
                 .id(gpui::ElementId::Name(addr.clone().into()))
@@ -1580,9 +1654,13 @@ impl Render for TrayModule {
                     let _ = self_tx.try_send(TrayMsg::CloseMenu);
                     let _ = activate_tx.try_send(ActivateReq::Default(addr_click.clone()));
                 })
-                .on_mouse_down(MouseButton::Right, move |ev, _, _cx| {
+                .on_mouse_down(MouseButton::Right, move |ev, _window, _cx| {
                     let x: f32 = ev.position.x.into();
-                    let _ = activate_tx_menu.try_send(ActivateReq::Menu(addr_menu.clone(), x));
+                    let _ = activate_tx_menu.try_send(ActivateReq::Menu(
+                        addr_menu.clone(),
+                        x,
+                        render_display_for_click,
+                    ));
                 })
                 .on_scroll_wheel(move |ev, _window, _cx| {
                     // SNI Scroll spec: delta is a signed int; sign convention
@@ -1608,8 +1686,11 @@ impl Render for TrayModule {
                     ));
                 });
 
-            // Attach hover tooltip when ToolTip property carries any text.
-            let base = if let Some(ref tt) = item.tooltip {
+            // Attach hover tooltip when ToolTip property carries any text,
+            // unless a context menu is currently open (see `menu_open`).
+            let base = if menu_open {
+                base
+            } else if let Some(ref tt) = item.tooltip {
                 if tt.is_empty() {
                     base
                 } else {

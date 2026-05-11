@@ -24,23 +24,45 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 
 pub struct SettingsModule {
     display_id: Option<DisplayId>,
-    popup: Option<WindowHandle<SettingsPopup>>,
+    open: Option<OpenPopup>,
+    close_tx: async_channel::Sender<()>,
+    popup_kind: crate::popup_catcher::PopupKind,
+}
+
+struct OpenPopup {
+    popup: WindowHandle<SettingsPopup>,
+    catchers: Vec<WindowHandle<crate::popup_catcher::PopupCatcher>>,
 }
 
 impl SettingsModule {
     pub fn new(display_id: Option<DisplayId>, cx: &mut Context<Self>) -> Self {
         cx.observe_global::<Theme>(|_, cx| cx.notify()).detach();
+
+        let (popup_kind, close_tx) =
+            crate::popup_catcher::register_entity(cx, |m, cx| m.close(cx));
+
         Self {
             display_id,
-            popup: None,
+            open: None,
+            close_tx,
+            popup_kind,
         }
     }
 
-    fn toggle(&mut self, cx: &mut App) {
-        if let Some(handle) = self.popup.take() {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
+    fn close(&mut self, cx: &mut Context<Self>) {
+        if let Some(open) = self.open.take() {
+            let _ = open.popup.update(cx, |_, window, _| window.remove_window());
+            crate::popup_catcher::close_catchers(cx, open.catchers);
+            cx.notify();
+        }
+    }
+
+    fn toggle(&mut self, cx: &mut Context<Self>) {
+        if self.open.is_some() {
+            self.close(cx);
             return;
         }
+        crate::popup_catcher::dismiss_others(cx, self.popup_kind);
 
         let opts = WindowOptions {
             titlebar: None,
@@ -53,7 +75,8 @@ impl SettingsModule {
             window_background: WindowBackgroundAppearance::Transparent,
             kind: WindowKind::LayerShell(LayerShellOptions {
                 namespace: "zbar-settings".to_string(),
-                layer: Layer::Top,
+                // Overlay so the popup body sits above the catchers (Top).
+                layer: Layer::Overlay,
                 anchor: Anchor::TOP | Anchor::RIGHT,
                 margin: Some((px(0.), px(8.), px(0.), px(0.))),
                 keyboard_interactivity: KeyboardInteractivity::OnDemand,
@@ -63,9 +86,21 @@ impl SettingsModule {
             ..Default::default()
         };
 
+        let catchers = crate::popup_catcher::open_catchers_for(
+            cx,
+            "zbar-settings-catcher",
+            self.close_tx.clone(),
+        );
+
         match cx.open_window(opts, |_, cx| cx.new(SettingsPopup::new)) {
-            Ok(handle) => self.popup = Some(handle),
-            Err(e) => tracing::warn!("settings: failed to open popup: {e}"),
+            Ok(popup) => {
+                self.open = Some(OpenPopup { popup, catchers });
+                cx.notify();
+            }
+            Err(e) => {
+                tracing::warn!("settings: failed to open popup: {e}");
+                crate::popup_catcher::close_catchers(cx, catchers);
+            }
         }
     }
 }

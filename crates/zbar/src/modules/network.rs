@@ -13,7 +13,14 @@ pub struct NetworkModule {
     interfaces: Vec<IfaceSnapshot>,
     rates: HashMap<u32, (f64, f64)>,
     display_id: Option<DisplayId>,
-    popup: Option<WindowHandle<NetworkPopup>>,
+    open: Option<OpenPopup>,
+    close_tx: async_channel::Sender<()>,
+    popup_kind: crate::popup_catcher::PopupKind,
+}
+
+struct OpenPopup {
+    popup: WindowHandle<NetworkPopup>,
+    catchers: Vec<WindowHandle<crate::popup_catcher::PopupCatcher>>,
 }
 
 impl NetworkModule {
@@ -48,18 +55,24 @@ impl NetworkModule {
         })
         .detach();
 
+        let (popup_kind, close_tx) =
+            crate::popup_catcher::register_entity(cx, |m, cx| m.close_popup(cx));
+
         NetworkModule {
             interfaces: Vec::new(),
             rates: HashMap::new(),
             display_id,
-            popup: None,
+            open: None,
+            close_tx,
+            popup_kind,
         }
     }
 
-    fn open_popup(&mut self, cx: &mut gpui::App) {
-        if self.popup.is_some() {
+    fn open_popup(&mut self, cx: &mut Context<Self>) {
+        if self.open.is_some() {
             return;
         }
+        crate::popup_catcher::dismiss_others(cx, self.popup_kind);
         let (tx, rx) = async_channel::bounded::<NetEvent>(8);
         net_info::spawn_netlink_worker(tx);
 
@@ -74,7 +87,8 @@ impl NetworkModule {
             window_background: WindowBackgroundAppearance::Transparent,
             kind: WindowKind::LayerShell(LayerShellOptions {
                 namespace: "zbar-netinfo".to_string(),
-                layer: Layer::Top,
+                // Overlay so the popup body sits above the catchers (Top).
+                layer: Layer::Overlay,
                 anchor: Anchor::TOP | Anchor::RIGHT,
                 margin: Some((px(0.), px(8.), px(0.), px(0.))),
                 keyboard_interactivity: KeyboardInteractivity::OnDemand,
@@ -84,15 +98,29 @@ impl NetworkModule {
             ..Default::default()
         };
 
+        let catchers = crate::popup_catcher::open_catchers_for(
+            cx,
+            "zbar-netinfo-catcher",
+            self.close_tx.clone(),
+        );
+
         match cx.open_window(opts, |_, cx| cx.new(|cx| NetworkPopup::new(rx, cx))) {
-            Ok(handle) => self.popup = Some(handle),
-            Err(e) => tracing::warn!("failed to open network popup: {e}"),
+            Ok(popup) => {
+                self.open = Some(OpenPopup { popup, catchers });
+                cx.notify();
+            }
+            Err(e) => {
+                tracing::warn!("failed to open network popup: {e}");
+                crate::popup_catcher::close_catchers(cx, catchers);
+            }
         }
     }
 
-    fn close_popup(&mut self, cx: &mut gpui::App) {
-        if let Some(handle) = self.popup.take() {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
+    fn close_popup(&mut self, cx: &mut Context<Self>) {
+        if let Some(open) = self.open.take() {
+            let _ = open.popup.update(cx, |_, window, _| window.remove_window());
+            crate::popup_catcher::close_catchers(cx, open.catchers);
+            cx.notify();
         }
     }
 }

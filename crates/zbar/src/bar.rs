@@ -18,6 +18,7 @@ use zbar::theme;
 use ztheme::Theme;
 
 pub struct Bar {
+    display_id: Option<DisplayId>,
     workspaces: Entity<WorkspacesModule>,
     window_title: Entity<WindowTitleModule>,
     tray: Entity<TrayModule>,
@@ -41,6 +42,7 @@ impl Bar {
     ) -> Self {
         cx.observe_global::<Theme>(|_, cx| cx.notify()).detach();
         Bar {
+            display_id,
             workspaces: cx.new(|cx| WorkspacesModule::new(backend, output_name, cx)),
             // WindowTitleModule subscribes to a compositor IPC stream (sway
             // socket or `niri msg` subprocess) — one per process is plenty.
@@ -69,6 +71,12 @@ impl Render for Bar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity_id = cx.entity().entity_id();
         let t = *cx.global::<Theme>();
+        // Stamp the tray entity with our display_id so its right-click
+        // handlers — built during the upcoming render — capture the right
+        // output for popup placement.
+        let bar_display = self.display_id;
+        self.tray
+            .update(cx, |tray, _| tray.set_render_display(bar_display));
         div()
             .size_full()
             .flex()

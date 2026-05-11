@@ -7,6 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use zbus::zvariant::{OwnedValue, Structure, Value};
 use ztheme::Theme;
 
+/// Width of the rendered menu in pixels.
+const MENU_WIDTH: f32 = 220.0;
+
 #[derive(Debug, thiserror::Error)]
 pub enum TrayMenuError {
     #[error("dbus: {0}")]
@@ -311,7 +314,6 @@ impl Render for TrayMenuPopup {
             col = col.child(div().h(px(1.)).my(px(3.)).bg(t.separator));
         }
 
-        // Clone current-level items to avoid borrowing self across the loop.
         let items: Vec<MenuItem> = self.current_items().to_vec();
         for item in &items {
             if !item.visible {
@@ -460,28 +462,45 @@ pub(crate) fn open_menu_popup(
     close_tx: async_channel::Sender<super::tray::TrayMsg>,
     display_id: Option<DisplayId>,
     click_x: f32,
-) -> Option<gpui::WindowHandle<TrayMenuPopup>> {
+) -> Option<(
+    gpui::WindowHandle<TrayMenuPopup>,
+    Vec<gpui::WindowHandle<crate::popup_catcher::PopupCatcher>>,
+)> {
+    // Catchers talk in `TrayMsg::CloseMenu` directly via the tray's main
+    // message drain; `open_catchers` accepts an arbitrary dismissal
+    // closure for this kind of typed channel.
+    let dismiss_tx = close_tx.clone();
+    let on_dismiss: crate::popup_catcher::DismissFn = std::sync::Arc::new(move |window, _| {
+        let _ = dismiss_tx.try_send(super::tray::TrayMsg::CloseMenu);
+        window.remove_window();
+    });
+    let catchers = crate::popup_catcher::open_catchers(cx, "zbar-tray-catcher", on_dismiss);
+    if catchers.is_empty() {
+        tracing::warn!("tray: no displays available for menu catchers");
+        return None;
+    }
+
     // Height must accommodate the deepest submenu we could drill into (+1 for "Back" row).
     let visible_count = max_visible_level(&items).max(1) + 1;
     let height = (visible_count as f32) * 26.0 + 12.0;
-    let menu_width: f32 = 220.0;
 
-    // Position menu so its left edge aligns with the click X, clamped to screen.
-    // With layer-shell we can only use LEFT anchor + left margin.
-    let left_margin = (click_x - menu_width / 2.0).max(0.0);
+    // Position menu so its center aligns with the click X, clamped to screen.
+    // With layer-shell we use TOP|LEFT anchor + left margin, and let the
+    // compositor handle output rotation/transform internally.
+    let left_margin = (click_x - MENU_WIDTH / 2.0).max(0.0);
 
     let opts = WindowOptions {
         titlebar: None,
         window_bounds: Some(WindowBounds::Windowed(Bounds {
             origin: point(px(0.), px(0.)),
-            size: Size::new(px(menu_width), px(height)),
+            size: Size::new(px(MENU_WIDTH), px(height)),
         })),
         display_id,
         app_id: Some("zbar-tray-menu".to_string()),
         window_background: WindowBackgroundAppearance::Transparent,
         kind: WindowKind::LayerShell(LayerShellOptions {
             namespace: "zbar-tray-menu".to_string(),
-            layer: Layer::Top,
+            layer: Layer::Overlay,
             anchor: Anchor::TOP | Anchor::LEFT,
             margin: Some((px(0.), px(0.), px(0.), px(left_margin))),
             keyboard_interactivity: KeyboardInteractivity::OnDemand,
@@ -494,9 +513,13 @@ pub(crate) fn open_menu_popup(
     match cx.open_window(opts, |_, cx| {
         cx.new(|cx| TrayMenuPopup::new(items, addr, menu_path, click_tx, close_tx, cx))
     }) {
-        Ok(handle) => Some(handle),
+        Ok(handle) => Some((handle, catchers)),
         Err(e) => {
             tracing::warn!("tray: failed to open menu popup: {e}");
+            // Clean up the orphaned catchers we already opened.
+            for catcher in catchers {
+                let _ = catcher.update(cx, |_, window, _| window.remove_window());
+            }
             None
         }
     }
