@@ -91,8 +91,6 @@ const IFLA_ADDRESS: u16 = 1;
 const IFLA_IFNAME: u16 = 3;
 const IFLA_STATS64: u16 = 23;
 const IFLA_OPERSTATE: u16 = 16;
-const IFLA_LINKINFO: u16 = 18;
-const IFLA_INFO_KIND: u16 = 1;
 
 // addr attributes
 const IFA_ADDRESS: u16 = 1;
@@ -362,7 +360,7 @@ fn parse_link_msg(payload: &[u8]) -> Option<LinkInfo> {
         mac: None,
         rx_bytes: 0,
         tx_bytes: 0,
-        is_physical: true,
+        is_physical: false,
     };
     for (ty, data) in RtaIter::new(attrs) {
         match ty {
@@ -387,18 +385,25 @@ fn parse_link_msg(payload: &[u8]) -> Option<LinkInfo> {
                 info.rx_bytes = rx_bytes;
                 info.tx_bytes = tx_bytes;
             }
-            // IFLA_INFO_KIND present ⇒ virtual (veth/bridge/vlan/tun/...).
-            IFLA_LINKINFO if RtaIter::new(data).any(|(nty, _)| nty == IFLA_INFO_KIND) => {
-                info.is_physical = false;
-            }
             _ => {}
         }
     }
-    // Loopback has no IFLA_LINKINFO but is always virtual.
-    if info.name == "lo" {
-        info.is_physical = false;
-    }
+    info.is_physical = iface_is_physical(&info.name);
     Some(info)
+}
+
+/// A network interface is "physical" when sysfs exposes a backing hardware
+/// device for it: `/sys/class/net/<name>/device` is a symlink to the PCI/USB
+/// device. Virtual interfaces (veth, bridge, vlan, tun, wireguard, loopback)
+/// have no such symlink.
+///
+/// This is authoritative regardless of how the link was discovered. Parsing
+/// IFLA_LINKINFO/IFLA_INFO_KIND only works on a full RTM_GETLINK dump —
+/// RTM_NEWLINK monitor events routinely omit IFLA_LINKINFO, which previously
+/// caused hot-plugged veth/tun interfaces to be misclassified as physical.
+fn iface_is_physical(name: &str) -> bool {
+    !name.is_empty()
+        && std::path::Path::new(&format!("/sys/class/net/{name}/device")).exists()
 }
 
 #[derive(Clone)]
@@ -890,4 +895,21 @@ fn refresh_wifi_cache(links: &[LinkInfo], cache: &mut HashMap<u32, Option<String
     }
     // prune stale entries
     cache.retain(|idx, _| links.iter().any(|l| l.index == *idx));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn iface_is_physical_rejects_empty_and_missing() {
+        assert!(!iface_is_physical(""));
+        assert!(!iface_is_physical("definitely-not-a-real-iface-zzz"));
+    }
+
+    #[test]
+    fn iface_is_physical_loopback_is_virtual() {
+        // `lo` always exists on Linux and never has a backing device.
+        assert!(!iface_is_physical("lo"));
+    }
 }
