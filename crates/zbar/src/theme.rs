@@ -15,7 +15,7 @@ pub const PADDING_X: Pixels = px(10.0);
 pub const MODULE_GAP: Pixels = px(4.0);
 pub const PILL_PX: Pixels = px(8.0);
 pub const PILL_PY: Pixels = px(3.0);
-const PCT_WIDTH: Pixels = px(32.0);
+const PCT_WIDTH: Pixels = px(28.0);
 
 /// Hover-bg for a workspace pill in the active state. The shared `Theme`
 /// only carries one accent_soft slot; we want the workspace pill's hover
@@ -40,13 +40,20 @@ pub fn pill(cx: &App) -> Div {
         .hover(move |s| s.bg(t.surface_hover))
 }
 
-/// Right-aligned percentage label (`"  9%"`, `" 87%"`). Width is fixed so
-/// the surrounding pill doesn't jitter as the integer width changes.
+/// Fixed-width, right-aligned percentage label (`"5%"`, `"87%"`, `"100%"`).
+///
+/// The width is fixed (not `min_w`) so CPU and memory labels are exactly
+/// equal width and the pill never jitters as the integer grows from 1 to 3
+/// digits. `justify_end` right-aligns the glyphs, so the `%` lines up
+/// regardless of the proportional font's space width — space-padding the
+/// string would only align in a monospace font.
 pub fn pct_label(value: impl std::fmt::Display, color: Hsla) -> Div {
     div()
-        .min_w(PCT_WIDTH)
+        .w(PCT_WIDTH)
+        .flex()
+        .justify_end()
         .text_color(color)
-        .child(format!("{value:>3}%"))
+        .child(format!("{value}%"))
 }
 
 /// Map a percentage to a semantic color via two thresholds: anything at

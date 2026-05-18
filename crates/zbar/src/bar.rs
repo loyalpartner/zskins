@@ -134,9 +134,9 @@ impl Render for Bar {
                     .child(self.cpu_mem.clone())
                     .child(self.battery.clone())
                     .child(separator(cx))
-                    .child(self.settings.clone())
+                    .child(self.quicksettings.clone())
                     .child(separator(cx))
-                    .child(self.quicksettings.clone()),
+                    .child(self.settings.clone()),
             )
     }
 }
